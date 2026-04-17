@@ -11,7 +11,7 @@ import os
 import sys
 import io
 
-# FORCE PRINT ANTES DE CUALQUIER COSA
+# FORCE PRINT 
 import sys
 sys.stderr.write("🔍 INICIANDO APP - CARGANDO VARIABLES\n")
 sys.stderr.flush()
