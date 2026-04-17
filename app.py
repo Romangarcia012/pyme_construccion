@@ -52,6 +52,10 @@ print("="*60 + "\n")
 mail = Mail(app)
 db.init_app(app)
 
+@app.route('/')
+def index():
+    return redirect(url_for('login'))
+
 # FUNCIONES DE EMAIL
 def generar_codigo():
     return ''.join(secrets.choice(string.digits) for _ in range(6))
