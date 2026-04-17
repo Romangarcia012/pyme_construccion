@@ -60,24 +60,32 @@ def index():
 def generar_codigo():
     return ''.join(secrets.choice(string.digits) for _ in range(6))
 
+import threading
+
 def enviar_email(destinatario, asunto, cuerpo):
-    try:
-        print(f"\n🔍 Intentando enviar email a: {destinatario}")
-        print(f"📧 Servidor: {app.config['MAIL_SERVER']}")
-        print(f"👤 Usuario: {app.config['MAIL_USERNAME']}")
-        
-        msg = Message(
-            asunto,
-            recipients=[destinatario],
-            html=cuerpo,
-            charset='utf-8'
-        )
-        mail.send(msg)
-        print(f"✓ Email enviado exitosamente a {destinatario}\n")
-        return True
-    except Exception as e:
-        print(f"✗ Error al enviar email: {e}\n")
-        return False
+    """Envía email de forma asincrónica en un thread separado"""
+    def _enviar():
+        try:
+            print(f"\n🔍 Intentando enviar email a: {destinatario}")
+            print(f"📧 Servidor: {app.config['MAIL_SERVER']}")
+            print(f"👤 Usuario: {app.config['MAIL_USERNAME']}")
+            
+            msg = Message(
+                asunto,
+                recipients=[destinatario],
+                html=cuerpo,
+                charset='utf-8'
+            )
+            mail.send(msg)
+            print(f"✓ Email enviado exitosamente a {destinatario}\n")
+        except Exception as e:
+            print(f"✗ Error al enviar email: {e}\n")
+    
+    # Ejecutar en un thread separado para no bloquear
+    thread = threading.Thread(target=_enviar)
+    thread.daemon = True
+    thread.start()
+    return True
 
 # LOGIN MANAGER
 login_manager = LoginManager()
