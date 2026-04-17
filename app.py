@@ -185,6 +185,7 @@ def cambiar_password():
         <p>Este código expira en 10 minutos.</p>
         """
         
+        print(f"🔥 ANTES DE ENVIAR EMAIL - email: {email}")
         if enviar_email(email, "Código de Restablecimiento - PYME", cuerpo_email):
             session['email_reset'] = email
             flash('Se envio un código a tu email.', 'success')
@@ -291,7 +292,8 @@ def registro():
         <h1 style="color: #1e90ff; letter-spacing: 5px;">{codigo}</h1>
         <p>Este codigo expira en 10 minutos.</p>
         """
-        
+
+        print(f"🔥 ANTES DE ENVIAR EMAIL - email: {email}")
         if enviar_email(email, "Codigo de Verificacion - PYME", cuerpo_email):
             session['user_id'] = usuario.id
             session['email_usuario'] = email
