@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agregar Gasto - PYME</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        ::-webkit-scrollbar {
+            width: 12px;
+            height: 12px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f0f0f;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #1e90ff 0%, #0d78d9 100%);
+            border-radius: 6px;
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.3);
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #0d78d9 0%, #0a5fa8 100%);
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.5);
+        }
+        * {
+            scrollbar-color: #1e90ff #0f0f0f;
+            scrollbar-width: thin;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .form-card {
+            background: #1a1a1a;
+            padding: 30px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+        }
+        h1 {
+            color: #fff;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        .subtitle {
+            color: #a0a0a0;
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: 13px;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #e0e0e0;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: 0.3s;
+            background: #252525;
+            color: #e0e0e0;
+            font-family: inherit;
+        }
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #1e90ff;
+            box-shadow: 0 0 0 3px rgba(30, 144, 255, 0.1);
+        }
+        .categoria-grupo {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 10px;
+            align-items: flex-end;
+        }
+        .categoria-grupo select {
+            margin: 0;
+        }
+        .btn-nueva-categoria {
+            padding: 12px 20px;
+            background: #1e90ff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: 0.3s;
+        }
+        .btn-nueva-categoria:hover {
+            background: #0d78d9;
+        }
+        .modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.8);
+        }
+        .modal-content {
+            background: #1a1a1a;
+            margin: 10% auto;
+            padding: 30px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            width: 90%;
+            max-width: 500px;
+        }
+        .modal-header {
+            margin-bottom: 20px;
+        }
+        .modal-header h2 {
+            color: #fff;
+            margin-bottom: 5px;
+        }
+        .modal-header p {
+            color: #a0a0a0;
+            font-size: 13px;
+        }
+        .close {
+            float: right;
+            font-size: 28px;
+            font-weight: bold;
+            color: #a0a0a0;
+            cursor: pointer;
+        }
+        .close:hover {
+            color: #fff;
+        }
+        .modal-buttons {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .btn-guardar {
+            background: #28a745;
+            color: white;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        .btn-guardar:hover {
+            background: #20c997;
+        }
+        .btn-cancelar {
+            background: #444;
+            color: #e0e0e0;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        .btn-cancelar:hover {
+            background: #555;
+        }
+        .botones {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 25px;
+        }
+        button[type="submit"] {
+            background: #28a745;
+            color: white;
+            padding: 14px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        button[type="submit"]:hover {
+            background: #20c997;
+        }
+        .help-text {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+        @media (max-width: 600px) {
+            .form-card {
+                padding: 20px;
+            }
+            .categoria-grupo {
+                grid-template-columns: 1fr;
+            }
+            .botones {
+                grid-template-columns: 1fr;
+            }
+        }
+        input[type="number"]::-webkit-outer-spin-button,
+        input[type="number"]::-webkit-inner-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="form-card">
+            <h1>Agregar Ingreso</h1>
+            <p class="subtitle">Registra un nuevo Ingreso</p>
+            
+            {% if get_flashed_messages() %}
+                {% for message in get_flashed_messages() %}
+                    <div style="background: rgba(220, 53, 69, 0.1); border-left: 4px solid #dc3545; padding: 15px; border-radius: 6px; margin-bottom: 20px; color: #dc3545; font-size: 13px;">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+            
+            <form method="POST">
+                <div class="form-group">
+                    <label for="descripcion">Descripcion</label>
+                    <input type="text" id="descripcion" name="descripcion" placeholder="Ej: Venta de producto" required autocomplete="off">
+                </div>
+                
+                <div class="form-group">
+                    <label for="monto">Monto ($)</label>
+                    <input type="number" id="monto" name="monto" placeholder="0.00" step="0.01" min="0" required autocomplete="off">
+                </div>
+                
+                <div class="form-group">
+                    <label>Categoria</label>
+                    <div class="categoria-grupo">
+                        <select id="categoria_id" name="categoria_id" required autocomplete="off">
+                            <option value="">-- Selecciona una categoria --</option>
+                            {% for cat in categorias %}
+                                <option value="{{ cat.id }}">{{ cat.nombre }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="botones">
+                    <button type="submit">Guardar Gasto</button>
+                    <button type="button" onclick="window.location.href='{{ url_for('dashboard') }}'" style="background: #444; color: #e0e0e0;">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

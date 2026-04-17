@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Crear Empresa</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 600px;
+            width: 100%;
+        }
+        
+        .form-card {
+            background: #1a1a1a;
+            padding: 40px;
+            border-radius: 12px;
+            border: 1px solid #2a2a2a;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+        
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        
+        .header h1 {
+            color: #fff;
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #a0a0a0;
+            font-size: 14px;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #e0e0e0;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        input, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: 0.3s;
+            background: #252525;
+            color: #e0e0e0;
+            font-family: inherit;
+        }
+        
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #1e90ff;
+            box-shadow: 0 0 0 3px rgba(30, 144, 255, 0.1);
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 80px;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .help-text {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+        
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #1e90ff 0%, #0d78d9 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.3s;
+            margin-top: 20px;
+        }
+        
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(30, 144, 255, 0.3);
+        }
+        
+        .info-box {
+            background: rgba(40, 167, 69, 0.1);
+            border-left: 4px solid #28a745;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 25px;
+            font-size: 13px;
+            color: #28a745;
+        }
+        
+        .required {
+            color: #dc3545;
+        }
+        
+        @media (max-width: 600px) {
+            .form-card {
+                padding: 25px;
+            }
+            
+            .header h1 {
+                font-size: 22px;
+            }
+            
+            .form-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="form-card">
+            <div class="header">
+                <h1>Crear tu Empresa</h1>
+                <p>Completa los datos básicos de tu empresa para comenzar</p>
+            </div>
+            
+            <div class="info-box">
+                Todos los datos pueden editarse después en configuración
+            </div>
+            
+            <form method="POST">
+                <div class="form-group">
+                    <label for="nombre">Nombre de la Empresa <span class="required">*</span></label>
+                    <input type="text" id="nombre" name="nombre" placeholder="Ej: Mi Negocio SRL" required autocomplete="off">
+                </div>
+                
+                <div class="form-group">
+                    <label for="ruc">CUIT / CUIL</label>
+                    <input type="text" id="ruc" name="ruc" placeholder="Ej: 123456789" autocomplete="off">
+                    <div class="help-text">Opcional</div>
+                </div>
+                       
+                <div class="form-group">
+                    <label for="email">Email de la Empresa</label>
+                    <input type="email" id="email" name="email" placeholder="Ej: contacto@miempresa.com" autocomplete="off">
+                    <div class="help-text">Opcional</div>
+                </div>
+                
+                <button type="submit">Crear Empresa y Comenzar</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

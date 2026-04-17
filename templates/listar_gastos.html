@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Gastos - PYME</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* CUSTOM SCROLLBAR - MÁS BONITO */
+        ::-webkit-scrollbar {
+            width: 12px;
+            height: 12px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0f0f0f;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #1e90ff 0%, #0d78d9 100%);
+            border-radius: 6px;
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.3);
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #0d78d9 0%, #0a5fa8 100%);
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Para Firefox */
+        * {
+            scrollbar-color: #1e90ff #0f0f0f;
+            scrollbar-width: thin;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        header {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            border: 1px solid #2a2a2a;
+        }
+        
+        h1 {
+            color: #fff;
+            margin-bottom: 20px;
+        }
+        
+        .filtros {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 15px;
+        }
+        
+        .filtro-grupo {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .filtro-grupo label {
+            font-size: 12px;
+            color: #a0a0a0;
+            margin-bottom: 5px;
+            font-weight: 600;
+        }
+        
+        .filtro-grupo input {
+            padding: 10px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 14px;
+            background: #252525;
+            color: #e0e0e0;
+            transition: 0.3s;
+        }
+        
+        .filtro-grupo input:focus {
+            outline: none;
+            border-color: #1e90ff;
+            box-shadow: 0 0 0 3px rgba(30, 144, 255, 0.1);
+        }
+        
+        .botones-filtro {
+            display: flex;
+            gap: 10px;
+            margin-top: 15px;
+        }
+        
+        .btn {
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        
+        .btn-filtrar {
+            background: #1e90ff;
+            color: white;
+        }
+        
+        .btn-filtrar:hover {
+            background: #0d78d9;
+            box-shadow: 0 4px 12px rgba(30, 144, 255, 0.2);
+        }
+        
+        .btn-limpiar {
+            background: #444;
+            color: #e0e0e0;
+        }
+        
+        .btn-limpiar:hover {
+            background: #555;
+        }
+        .btn-exportar {
+            background: #28a745;
+            color: white;
+            text-decoration: none;
+        }
+        
+        .btn-exportar:hover {
+            background: #20c997;
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
+            text-decoration: none;
+        }
+        
+        .menu {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 15px;
+        }
+        
+        .menu a {
+            padding: 10px 15px;
+            background: #1e90ff;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: 0.3s;
+        }
+        
+        .menu a:hover {
+            background: #0d78d9;
+            box-shadow: 0 4px 12px rgba(30, 144, 255, 0.2);
+        }
+        
+        .tabla-container {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #2a2a2a;
+        }
+        
+        th {
+            background: #252525;
+            color: #e0e0e0;
+            font-weight: 600;
+        }
+        
+        tr:hover {
+            background: #252525;
+        }
+        
+        .acciones {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+        
+        .btn-editar, .btn-eliminar {
+            padding: 6px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-editar {
+            background: #ffc107;
+            color: #000;
+        }
+        
+        .btn-editar:hover {
+            background: #ffb300;
+            box-shadow: 0 4px 12px rgba(255, 193, 7, 0.2);
+        }
+        
+        .btn-eliminar {
+            background: #dc3545;
+            color: white;
+            border: none;
+        }
+        
+        .btn-eliminar:hover {
+            background: #c82333;
+            box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2);
+        }
+        
+        .empty {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+        
+        .total {
+            background: #252525;
+            padding: 15px;
+            border-radius: 6px;
+            margin-top: 15px;
+            font-weight: 600;
+            color: #e0e0e0;
+            border: 1px solid #333;
+        }
+        
+        @media (max-width: 768px) {
+            .filtros {
+                grid-template-columns: 1fr;
+            }
+            
+            table {
+                font-size: 12px;
+            }
+            
+            th, td {
+                padding: 8px;
+            }
+            
+            .acciones {
+                flex-direction: column;
+            }
+            
+            .btn-editar, .btn-eliminar {
+                width: 100%;
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>Lista de Gastos</h1>
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 15px;">
+                <button type="button" class="btn btn-exportar" onclick="abrirModalGastos()" style="border: none; cursor: pointer; padding: 10px 15px; border-radius: 6px;">Descargar Excel</button>
+            </div>
+            <div class="filtros">
+                <form method="GET" style="display: contents;">
+                    <div class="filtro-grupo">
+                        <label>Desde</label>
+                        <input type="date" name="fecha_inicio" value="{{ request.args.get('fecha_inicio', '') }}" autocomplete="off">
+                    </div>
+                    <div class="filtro-grupo">
+                        <label>Hasta</label>
+                        <input type="date" name="fecha_fin" value="{{ request.args.get('fecha_fin', '') }}" autocomplete="off">
+                    </div>
+                </form>
+            </div>
+            
+            <div class="botones-filtro">
+                <form method="GET" style="display: contents;">
+                    <input type="hidden" name="fecha_inicio" value="{{ request.args.get('fecha_inicio', '') }}">
+                    <input type="hidden" name="fecha_fin" value="{{ request.args.get('fecha_fin', '') }}">
+                    <button type="submit" class="btn btn-filtrar">Filtrar</button>
+                </form>
+                <button type="button" class="btn btn-limpiar" onclick="window.location.href='/gasto/listar'">Limpiar Filtros</button>
+            </div>
+            
+            <div class="menu" style="margin-top: 15px;">
+                <a href="{{ url_for('dashboard') }}">← Volver</a>
+                <a href="{{ url_for('nuevo_gasto') }}">Nuevo Gasto</a>
+            </div>
+        </header>
+        
+        <div class="tabla-container">
+            {% if gastos %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Fecha</th>
+                            <th>Descripción</th>
+                            <th>Monto</th>
+                            <th>Categoría</th>
+                            <th>Pagado por</th>
+                            <th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% set total = 0 %}
+                        {% for gasto in gastos %}
+                            {% set total = total + gasto.monto %}
+                            <tr>
+                                <td>{{ gasto.fecha.strftime('%d/%m/%Y') }}</td>
+                                <td>{{ gasto.descripcion }}</td>
+                                <td><strong>${{ "%.2f"|format(gasto.monto) }}</strong></td>
+                                <td>{{ gasto.categoria.nombre }}</td>
+                                <td>{{ gasto.pagado_por.nombre }}</td>
+                                <td>
+                                    <div class="acciones">
+                                        <a href="{{ url_for('editar_gasto', id=gasto.id) }}" class="btn-editar">Editar</a>
+                                        <form method="POST" action="{{ url_for('eliminar_gasto', id=gasto.id) }}" style="display: inline;">
+                                            <button type="submit" class="btn-eliminar" onclick="return confirm('¿Estás seguro de eliminar este gasto?')">Eliminar</button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                
+                <div class="total">
+                    Total Gastos: ${{ "%.2f"|format(total) }}
+                </div>
+            {% else %}
+                <div class="empty">
+                    <p>No hay gastos registrados</p>
+                    <p style="margin-top: 10px;">
+                        <a href="{{ url_for('nuevo_gasto') }}" style="color: #667eea; text-decoration: none; font-weight: 600;">
+                            Registra tu primer gasto
+                        </a>
+                    </p>
+                </div>
+            {% endif %}
+        </div>
+    </div>
+        <!-- MODAL FECHAS GASTOS PERSONALIZADO -->
+    <div id="modalFechasGastos" class="modal-custom" style="display: none;">
+        <div class="modal-custom-content">
+            <div class="modal-custom-header">
+                <h3>Descargar Gastos</h3>
+                <button type="button" class="modal-custom-close" onclick="cerrarModalGastos()">✕</button>
+            </div>
+            <div class="modal-custom-body">
+                <form id="formFechasGastos">
+                    <div class="filtro-grupo">
+                        <label>Desde:</label>
+                        <input type="date" id="fechaInicioGastos" name="fecha_inicio" style="width: 100%;" autocomplete="off"> 
+                    </div>
+                    <div class="filtro-grupo">
+                        <label>Hasta:</label>
+                        <input type="date" id="fechaFinGastos" name="fecha_fin" style="width: 100%;" autocomplete="off">
+                    </div>
+                </form>
+            </div>
+            <div class="modal-custom-footer">
+                <button type="button" class="btn" onclick="cerrarModalGastos()" style="background: #6c757d;">Cancelar</button>
+                <button type="button" class="btn btn-exportar" onclick="descargarGastos()">Descargar</button>
+            </div>
+        </div>
+    </div>
+
+    <style>
+    .modal-custom {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+    }
+
+    .modal-custom-content {
+        background: #1a1a1a;
+        border: 1px solid #2a2a2a;
+        border-radius: 8px;
+        width: 90%;
+        max-width: 400px;
+        box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+    }
+
+    .modal-custom-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        padding: 20px;
+        border-bottom: 1px solid #2a2a2a;
+    }
+
+    .modal-custom-header h3 {
+        color: #fff;
+        margin: 0;
+        font-size: 18px;
+    }
+
+    .modal-custom-close {
+        background: none;
+        border: none;
+        color: #a0a0a0;
+        font-size: 24px;
+        cursor: pointer;
+        transition: 0.3s;
+    }
+
+    .modal-custom-close:hover {
+        color: #fff;
+    }
+
+    .modal-custom-body {
+        padding: 20px;
+    }
+
+    .modal-custom-body .filtro-grupo {
+        margin-bottom: 15px;
+    }
+
+    .modal-custom-body .filtro-grupo label {
+        display: block;
+        color: #a0a0a0;
+        font-size: 13px;
+        margin-bottom: 8px;
+        font-weight: 600;
+    }
+
+    .modal-custom-body .filtro-grupo input {
+        width: 100%;
+        padding: 10px;
+        border: 1px solid #333;
+        border-radius: 6px;
+        background: #252525;
+        color: #e0e0e0;
+        font-size: 13px;
+    }
+
+    .modal-custom-body .filtro-grupo input:focus {
+        outline: none;
+        border-color: #1e90ff;
+        box-shadow: 0 0 0 3px rgba(30, 144, 255, 0.1);
+    }   
+
+    .modal-custom-footer {
+        display: flex;
+        gap: 10px;
+        justify-content: flex-end;
+        padding: 20px;
+        border-top: 1px solid #2a2a2a;
+    }
+
+    .modal-custom-footer .btn {
+        padding: 10px 20px;
+        border: none;
+        border-radius: 6px;
+        cursor: pointer;
+        font-weight: 600;
+        font-size: 13px;
+        transition: 0.3s;
+        color: white;
+    }
+
+    .modal-custom-footer .btn:hover {
+        opacity: 0.9;
+    }
+    </style>
+
+    <script>
+    function abrirModalGastos() {
+        document.getElementById('modalFechasGastos').style.display = 'flex';
+    }
+
+    function cerrarModalGastos() {
+        document.getElementById('modalFechasGastos').style.display = 'none';
+    }
+
+    function descargarGastos() {
+        const fechaInicio = document.getElementById('fechaInicioGastos').value;
+        const fechaFin = document.getElementById('fechaFinGastos').value;
+  
+        let url = "{{ url_for('exportar_gastos') }}";
+        if (fechaInicio) url += "?fecha_inicio=" + fechaInicio;
+        if (fechaFin) url += (fechaInicio ? "&" : "?") + "fecha_fin=" + fechaFin;
+  
+        window.location.href = url;
+        cerrarModalGastos();
+    }
+
+// Cerrar modal al hacer clic fuera
+    document.getElementById('modalFechasGastos').addEventListener('click', function(e) {
+        if (e.target === this) {
+            cerrarModalGastos();
+        }
+    });
+    </script>
+</body>
+</html>

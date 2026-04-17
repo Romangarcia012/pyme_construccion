@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Categorías</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+        
+        h1 {
+            color: #fff;
+            font-size: 28px;
+        }
+        
+        .btn-nueva {
+            background: #28a745;
+            color: white;
+            padding: 12px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-nueva:hover {
+            background: #20c997;
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
+        }
+        
+        .tabla-container {
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            overflow: hidden;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th {
+            background: #252525;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #fff;
+            border-bottom: 1px solid #333;
+        }
+        
+        td {
+            padding: 15px;
+            border-bottom: 1px solid #333;
+        }
+        
+        tr:last-child td {
+            border-bottom: none;
+        }
+        
+        tr:hover {
+            background: #252525;
+        }
+        
+        .tipo-gasto {
+            background: rgba(220, 53, 69, 0.2);
+            color: #ff6b6b;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+        
+        .tipo-ingreso {
+            background: rgba(40, 167, 69, 0.2);
+            color: #51cf66;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+        
+        .acciones {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .btn-editar, .btn-eliminar {
+            padding: 8px 12px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 600;
+            transition: 0.3s;
+            text-decoration: none;
+            display: inline-block;
+        }
+        
+        .btn-editar {
+            background: #1e90ff;
+            color: white;
+        }
+        
+        .btn-editar:hover {
+            background: #0d7acc;
+        }
+        
+        .btn-eliminar {
+            background: #dc3545;
+            color: white;
+        }
+        
+        .btn-eliminar:hover {
+            background: #b51d27;
+        }
+        
+        .vacio {
+            text-align: center;
+            padding: 40px;
+            color: #888;
+        }
+        
+        .vacio p {
+            margin-bottom: 20px;
+            font-size: 16px;
+        }
+        
+        .badge {
+            background: #444;
+            color: #e0e0e0;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+        
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        
+        .btn-volver:hover {
+            background: #555;
+        }
+        
+        @media (max-width: 768px) {
+            .header {
+                flex-direction: column;
+                gap: 15px;
+                align-items: flex-start;
+            }
+            
+            table {
+                font-size: 14px;
+            }
+            
+            th, td {
+                padding: 10px;
+            }
+            
+            .acciones {
+                flex-direction: column;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="/dashboard" class="btn-volver">← Volver al Dashboard</a>
+        
+        <div class="header">
+            <h1>Mis Categorías</h1>
+            <a href="/nueva-categoria" class="btn-nueva">+ Nueva Categoría</a>
+        </div>
+        
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div style="padding: 15px; margin-bottom: 20px; border-radius: 6px; border-left: 4px solid {% if category == 'success' %}#28a745{% else %}#dc3545{% endif %}; background: {% if category == 'success' %}rgba(40, 167, 69, 0.1){% else %}rgba(220, 53, 69, 0.1){% endif %}; color: {% if category == 'success' %}#51cf66{% else %}#ff6b6b{% endif %};">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+        
+        {% if categorias_datos %}
+            <div class="tabla-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Nombre</th>
+                            <th>Tipo</th>
+                            <th>Transacciones</th>
+                            <th>Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for item in categorias_datos %}
+                            <tr>
+                                <td>{{ item.categoria.nombre }}</td>
+                                <td>
+                                    {% if item.categoria.tipo == 'gasto' %}
+                                        <span class="tipo-gasto">Gasto</span>
+                                    {% else %}
+                                        <span class="tipo-ingreso">Ingreso</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <span class="badge">{{ item.total_transacciones }} total</span>
+                                    {% if item.gastos > 0 %}
+                                        <span class="badge">{{ item.gastos }} gastos</span>
+                                    {% endif %}
+                                    {% if item.ingresos > 0 %}
+                                        <span class="badge">{{ item.ingresos }} ingresos</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <div class="acciones">
+                                        <a href="/categoria/editar/{{ item.categoria.id }}" class="btn-editar">Editar</a>
+                                        <form method="POST" action="/categoria/eliminar/{{ item.categoria.id }}" style="display: inline;">
+                                            <button type="submit" class="btn-eliminar" onclick="return confirm('¿Estás seguro de que deseas eliminar esta categoría?')">Eliminar</button>
+                                        </form>
+                                    </div>
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        {% else %}
+            <div class="tabla-container">
+                <div class="vacio">
+                    <p>Aún no tienes categorías creadas</p>
+                    <a href="/nueva-categoria" class="btn-nueva">+ Crear Primera Categoría</a>
+                </div>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>

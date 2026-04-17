@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verificar Codigo - PYME</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 380px;
+            width: 100%;
+        }
+        .form-card {
+            background: #1a1a1a;
+            padding: 40px;
+            border-radius: 12px;
+            border: 1px solid #2a2a2a;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #fff;
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+        .header p {
+            color: #a0a0a0;
+            font-size: 13px;
+        }
+        .info-box {
+            background: rgba(30, 144, 255, 0.1);
+            border-left: 4px solid #1e90ff;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #1e90ff;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #e0e0e0;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        input {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: 0.3s;
+            background: #252525;
+            color: #e0e0e0;
+            letter-spacing: 2px;
+            text-align: center;
+        }
+        input:focus {
+            outline: none;
+            border-color: #1e90ff;
+            box-shadow: 0 0 0 3px rgba(30, 144, 255, 0.1);
+        }
+        button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #1e90ff 0%, #0d78d9 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.3s;
+            margin-top: 10px;
+        }
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(30, 144, 255, 0.3);
+        }
+        .alert {
+            background: rgba(220, 53, 69, 0.1);
+            border-left: 4px solid #dc3545;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            color: #dc3545;
+            font-size: 13px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="form-card">
+            <div class="header">
+                <h1>Verificar Codigo</h1>
+                <p>Se envio un código a {{ email }}</p>
+            </div>
+            
+            {% if get_flashed_messages() %}
+                {% for message in get_flashed_messages() %}
+                    <div class="alert">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+            
+            <div class="info-box">
+                Ingresa el código de 6 digitos que recibiste en tu email
+            </div>
+            
+            <form method="POST">
+                <div class="form-group">
+                    <label for="codigo">Código</label>
+                    <input type="text" id="codigo" name="codigo" placeholder="000000" maxlength="6" required autocomplete="off">
+                </div>
+                
+                <button type="submit">Verificar</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>

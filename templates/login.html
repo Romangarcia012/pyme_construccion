@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Iniciar Sesion - PYME</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0f0f0f; }
+        ::-webkit-scrollbar-thumb { background: #1e90ff; border-radius: 4px; }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            width: 100%;
+            max-width: 360px;
+        }
+        
+        .logo {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+        
+        .logo h1 {
+            color: #1e90ff;
+            font-size: 32px;
+            margin-bottom: 5px;
+        }
+        
+        .logo p {
+            color: #888;
+            font-size: 12px;
+        }
+        
+        .form-card {
+            background: #1a1a1a;
+            padding: 25px;
+            border-radius: 10px;
+            border: 1px solid #2a2a2a;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 6px;
+            color: #e0e0e0;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        
+        input {
+            width: 100%;
+            padding: 11px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 14px;
+            background: #252525;
+            color: #e0e0e0;
+            transition: 0.2s;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #1e90ff;
+            background: #2a2a2a;
+        }
+        
+        button {
+            width: 100%;
+            padding: 11px;
+            background: linear-gradient(135deg, #1e90ff 0%, #0d78d9 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.2s;
+            margin-top: 8px;
+        }
+        
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(30, 144, 255, 0.3);
+        }
+        
+        .links {
+            margin-top: 15px;
+            text-align: center;
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        
+        .links a {
+            color: #1e90ff;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        
+        .links a:hover {
+            text-decoration: underline;
+        }
+        
+        .alert {
+            background: rgba(220, 53, 69, 0.1);
+            border-left: 3px solid #dc3545;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            color: #dc3545;
+            font-size: 12px;
+        }
+        
+        @media (max-width: 480px) {
+            .form-card { padding: 20px; }
+            .logo h1 { font-size: 26px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <h1>PYME</h1>
+            <p>Sistema de Gestión Financiera</p>
+        </div>
+        
+        {% if get_flashed_messages() %}
+            {% for message in get_flashed_messages() %}
+                <div class="alert">{{ message }}</div>
+            {% endfor %}
+        {% endif %}
+        
+        <div class="form-card">
+            <form method="POST">
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" name="email" id="email" required autocomplete="off">
+                </div>
+                
+                <div class="form-group">
+                    <label for="password">Contraseña</label>
+                    <input type="password" name="password" id="password" required autocomplete="off">
+                </div>
+                
+                <button type="submit">Iniciar Sesión</button>
+            </form>
+            
+            <div class="links">
+                ¿No tienes cuenta? <a href="{{ url_for('registro') }}">Regístrate</a>
+                <br>
+                ¿Olvidaste tu contraseña? <a href="{{ url_for('cambiar_password') }}">Recupérala</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

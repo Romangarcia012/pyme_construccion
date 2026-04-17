@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nueva Categoría</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        
+        .form-card {
+            background: #1a1a1a;
+            padding: 30px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+        }
+        
+        h1 {
+            color: #fff;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #e0e0e0;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        input, select {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 14px;
+            background: #252525;
+            color: #e0e0e0;
+            transition: 0.3s;
+        }
+        
+        input:focus, select:focus {
+            outline: none;
+            border-color: #1e90ff;
+            box-shadow: 0 0 0 3px rgba(30, 144, 255, 0.1);
+        }
+        
+        .botones {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 25px;
+        }
+        
+        button {
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.3s;
+            width: 100%;
+        }
+        
+        .btn-guardar {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-guardar:hover {
+            background: #20c997;
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
+        }
+        
+        .btn-cancelar {
+            background: #444;
+            color: #e0e0e0;
+        }
+        
+        .btn-cancelar:hover {
+            background: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="form-card">
+            <h1>Nueva Categoría</h1>
+            
+            <!-- Alerta de éxito -->
+            <div id="alertaExito" style="display: none; padding: 15px; background: #d4edda; color: #155724; border-radius: 6px; border-left: 4px solid #28a745; margin-bottom: 10px; font-size: 14px;">
+                ✅ Categoría creada exitosamente
+            </div>
+            
+            <!-- Alerta de error -->
+            <div id="alertaError" style="display: none; padding: 15px; background: #f8d7da; color: #721c24; border-radius: 6px; border-left: 4px solid #dc3545; margin-bottom: 10px; font-size: 14px;">
+                <span id="textoError"></span>
+            </div>
+            
+            {% if get_flashed_messages() %}
+                {% for category, message in get_flashed_messages(with_categories=true) %}
+                    {% if category == 'success' %}
+                        <div style="padding: 15px; background: #d4edda; color: #155724; border-radius: 6px; border-left: 4px solid #28a745; margin-bottom: 10px; font-size: 14px;">
+                            {{ message }}
+                        </div>
+                    {% else %}
+                        <div style="padding: 15px; background: #f8d7da; color: #721c24; border-radius: 6px; border-left: 4px solid #dc3545; margin-bottom: 10px; font-size: 14px;">
+                            {{ message }}
+                        </div>
+                    {% endif %}
+                {% endfor %}
+            {% endif %}
+            
+            <form id="formCategoria" method="POST" action="{{ url_for('nueva_categoria') }}">
+                <div class="form-group">
+                    <label>Nombre de la Categoría</label>
+                    <input type="text" name="nombre" id="nombreInput" required placeholder="Ej: Servicios" autocomplete="off">
+                </div>
+    
+                <div class="form-group">
+                    <label>Tipo</label>
+                    <select name="tipo" id="tipoInput" required autocomplete="off">
+                        <option value="">Selecciona un tipo</option>
+                        <option value="gasto">Gasto</option>
+                        <option value="ingreso">Ingreso</option>
+                    </select>
+                </div>
+    
+                <div class="botones">
+                    <button type="submit" class="btn-guardar" id="btnGuardar">Guardar</button>
+                    <button type="button" class="btn-cancelar" onclick="window.location.href='/categorias'">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('formCategoria').addEventListener('submit', async function(e) {
+            e.preventDefault();
+
+            const nombre = document.getElementById('nombreInput').value.trim();
+            const tipo = document.getElementById('tipoInput').value;
+            const btnGuardar = document.getElementById('btnGuardar');
+            const textoOriginal = btnGuardar.textContent;
+
+            if (!nombre) {
+                mostrarError('El nombre es obligatorio');
+                return;
+            }       
+
+            if (!tipo) {
+                mostrarError('Debes seleccionar un tipo');
+                return;
+            }
+
+            btnGuardar.textContent = 'Guardando...';
+            btnGuardar.disabled = true;
+
+    // Esperar 500ms y luego enviar normalmente
+            setTimeout(() => {
+                this.submit();
+            }, 500);
+        });
+
+        function mostrarExito() {
+            const alerta = document.getElementById('alertaExito');
+            const alertaError = document.getElementById('alertaError');
+            alertaError.style.display = 'none';
+            alerta.style.display = 'block';
+
+            setTimeout(() => {
+                alerta.style.display = 'none';
+            }, 3000);
+        }
+
+        function mostrarError(mensaje) {
+            const alerta = document.getElementById('alertaError');
+            const alertaExito = document.getElementById('alertaExito');
+            document.getElementById('textoError').textContent = '❌ ' + mensaje;
+            alertaExito.style.display = 'none';
+            alerta.style.display = 'block';
+        }
+    </script>
+</body>
+</html>

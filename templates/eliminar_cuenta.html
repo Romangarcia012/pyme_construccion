@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eliminar Cuenta - PYME</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        ::-webkit-scrollbar {
+            width: 12px;
+            height: 12px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #0f0f0f;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #1e90ff 0%, #0d78d9 100%);
+            border-radius: 6px;
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.3);
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #0d78d9 0%, #0a5fa8 100%);
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.5);
+        }
+        * {
+            scrollbar-color: #1e90ff #0f0f0f;
+            scrollbar-width: thin;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .form-card {
+            background: #1a1a1a;
+            padding: 30px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+        }
+        h1 {
+            color: #dc3545;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        .subtitle {
+            color: #a0a0a0;
+            text-align: center;
+            margin-bottom: 25px;
+            font-size: 13px;
+        }
+        .alert-danger {
+            background: rgba(220, 53, 69, 0.1);
+            border-left: 4px solid #dc3545;
+            padding: 20px;
+            border-radius: 6px;
+            margin-bottom: 25px;
+            color: #dc3545;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        .info-box {
+            background: #252525;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #333;
+            margin-bottom: 25px;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .info-box strong {
+            color: #dc3545;
+        }
+        .info-box ul {
+            margin-top: 10px;
+            margin-left: 20px;
+        }
+        .info-box li {
+            margin-bottom: 5px;
+            color: #a0a0a0;
+        }
+        .checkbox-group {
+            background: #252525;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #333;
+            margin-bottom: 25px;
+        }
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #333;
+        }
+        .checkbox-item:last-child {
+            border-bottom: none;
+        }
+        input[type="checkbox"] {
+            width: 20px;
+            height: 20px;
+            margin-right: 10px;
+            cursor: pointer;
+            accent-color: #dc3545;
+        }
+        label {
+            cursor: pointer;
+            flex: 1;
+        }
+        .botones {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 25px;
+        }
+        button {
+            padding: 14px;
+            border: none;
+            border-radius: 6px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.3s;
+            font-size: 16px;
+        }
+        .btn-eliminar {
+            background: #dc3545;
+            color: white;
+        }
+        .btn-eliminar:hover {
+            background: #c82333;
+        }
+        .btn-eliminar:disabled {
+            background: #666;
+            cursor: not-allowed;
+        }
+        .btn-cancelar {
+            background: #444;
+            color: #e0e0e0;
+        }
+        .btn-cancelar:hover {
+            background: #555;
+        }
+        .advertencia {
+            background: rgba(255, 193, 7, 0.1);
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            color: #ffc107;
+            font-size: 13px;
+        }
+        @media (max-width: 600px) {
+            .form-card {
+                padding: 20px;
+            }
+            h1 {
+                font-size: 20px;
+            }
+            .botones {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="form-card">
+            <h1>Eliminar Cuenta</h1>
+            <p class="subtitle">Esta accion es irreversible</p>
+            
+            {% if get_flashed_messages() %}
+                {% for message in get_flashed_messages() %}
+                    <div class="alert-danger">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+            
+            <div class="alert-danger">
+                ADVERTENCIA: Al eliminar tu cuenta se borraran permanentemente:
+            </div>
+            
+            <div class="info-box">
+                <strong>Se eliminara:</strong>
+                <ul>
+                    <li>Tu cuenta de usuario</li>
+                    <li>Tu empresa y todos sus datos</li>
+                    <li>Todos tus gastos registrados</li>
+                    <li>Todos tus ingresos registrados</li>
+                    <li>Todas tus categorias personalizadas</li>
+                    <li>Todo el historial de cambios</li>
+                </ul>
+            </div>
+            
+            <div class="advertencia">
+                Esta accion NO se puede deshacer. Por favor, asegurate de que deseas continuar.
+            </div>
+            
+            <div class="checkbox-group">
+                <div class="checkbox-item">
+                    <input type="checkbox" id="entiendo" onchange="actualizarBoton()">
+                    <label for="entiendo">Entiendo que esto eliminara todos mis datos</label>
+                </div>
+                <div class="checkbox-item">
+                    <input type="checkbox" id="confirmo" onchange="actualizarBoton()">
+                    <label for="confirmo">Confirmo que deseo eliminar mi cuenta permanentemente</label>
+                </div>
+            </div>
+            
+            <form method="POST">
+                <div class="botones">
+                    <button type="submit" class="btn-eliminar" id="btnEliminar" disabled>
+                        Eliminar Cuenta Permanentemente
+                    </button>
+                    <button type="button" class="btn-cancelar" onclick="window.location.href='{{ url_for('dashboard') }}'">
+                        Cancelar
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <script>
+        function actualizarBoton() {
+            const entiendo = document.getElementById("entiendo").checked;
+            const confirmo = document.getElementById("confirmo").checked;
+            const btnEliminar = document.getElementById("btnEliminar");
+            
+            if (entiendo && confirmo) {
+                btnEliminar.disabled = false;
+            } else {
+                btnEliminar.disabled = true;
+            }
+        }
+    </script>
+</body>
+</html>

@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Verificar Email - PYME</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0f0f0f; }
+        ::-webkit-scrollbar-thumb { background: #1e90ff; border-radius: 4px; }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        
+        .container {
+            width: 100%;
+            max-width: 360px;
+        }
+        
+        .logo {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+        
+        .logo h1 {
+            color: #1e90ff;
+            font-size: 32px;
+            margin-bottom: 5px;
+        }
+        
+        .logo p {
+            color: #888;
+            font-size: 12px;
+        }
+        
+        .form-card {
+            background: #1a1a1a;
+            padding: 25px;
+            border-radius: 10px;
+            border: 1px solid #2a2a2a;
+        }
+        
+        .email-info {
+            background: rgba(30, 144, 255, 0.1);
+            border-left: 3px solid #1e90ff;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .email-info p {
+            color: #888;
+            font-size: 12px;
+            margin-bottom: 5px;
+        }
+        
+        .email-info strong {
+            color: #1e90ff;
+            display: block;
+            font-size: 14px;
+        }
+        
+        .form-group {
+            margin-bottom: 15px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 6px;
+            color: #e0e0e0;
+            font-weight: 600;
+            font-size: 12px;
+        }
+        
+        input {
+            width: 100%;
+            padding: 11px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 16px;
+            background: #252525;
+            color: #e0e0e0;
+            transition: 0.2s;
+            text-align: center;
+            letter-spacing: 3px;
+            font-weight: bold;
+        }
+        
+        input:focus {
+            outline: none;
+            border-color: #1e90ff;
+            background: #2a2a2a;
+        }
+        
+        button {
+            width: 100%;
+            padding: 11px;
+            background: linear-gradient(135deg, #1e90ff 0%, #0d78d9 100%);
+            color: white;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.2s;
+            margin-top: 8px;
+        }
+        
+        button:hover {
+            transform: translateY(-1px);
+            box-shadow: 0 4px 12px rgba(30, 144, 255, 0.3);
+        }
+        
+        .info-text {
+            margin-top: 15px;
+            text-align: center;
+            font-size: 12px;
+            line-height: 1.6;
+            color: #888;
+        }
+        
+        .info-text a {
+            color: #1e90ff;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        
+        .info-text a:hover {
+            text-decoration: underline;
+        }
+        
+        .alert {
+            background: rgba(220, 53, 69, 0.1);
+            border-left: 3px solid #dc3545;
+            padding: 10px;
+            border-radius: 4px;
+            margin-bottom: 15px;
+            color: #dc3545;
+            font-size: 12px;
+        }
+        
+        .alert-success {
+            background: rgba(40, 167, 69, 0.1);
+            border-left-color: #28a745;
+            color: #28a745;
+        }
+        
+        @media (max-width: 480px) {
+            .form-card { padding: 20px; }
+            .logo h1 { font-size: 26px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <h1>PYME</h1>
+            <p>Sistema de Gestión Financiera</p>
+        </div>
+        
+        <div class="form-card">
+            <h2 style="margin-bottom: 10px; font-size: 18px;">Verifica tu Email</h2>
+            <p style="color: #888; font-size: 12px; margin-bottom: 20px;">Ingresa el código que recibiste</p>
+            
+            <div class="email-info">
+                <p>Código enviado a:</p>
+                <strong>{{ email }}</strong>
+            </div>
+            
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="alert {% if category == 'success' %}alert-success{% endif %}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+            
+            <form method="POST">
+                <div class="form-group">
+                    <label for="codigo">Código de Verificación</label>
+                    <input type="text" id="codigo" name="codigo" placeholder="000000" maxlength="6" required autocomplete="off">
+                </div>
+                
+                <button type="submit">Verificar Código</button>
+            </form>
+            
+            <div class="info-text">
+                <p>¿No recibiste el código?</p>
+                <a href="{{ url_for('registro') }}">Volver a registrarse</a>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

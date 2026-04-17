@@ -1,0 +1,865 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - PYME Construcción</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        /* CUSTOM SCROLLBAR - MÁS BONITO */
+        ::-webkit-scrollbar {
+            width: 12px;
+            height: 12px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #0f0f0f;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: linear-gradient(180deg, #1e90ff 0%, #0d78d9 100%);
+            border-radius: 6px;
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.3);
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: linear-gradient(180deg, #0d78d9 0%, #0a5fa8 100%);
+            box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Para Firefox */
+        * {
+            scrollbar-color: #1e90ff #0f0f0f;
+            scrollbar-width: thin;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            display: flex;
+        }
+        
+        /* SIDEBAR */
+        .sidebar {
+            width: 280px;
+            background: #1a1a1a;
+            border-right: 1px solid #2a2a2a;
+            padding: 20px;
+            height: 100vh;
+            position: fixed;
+            left: 0;
+            top: 0;
+            overflow-y: auto;
+            z-index: 100;
+        }
+        
+        .sidebar-header {
+            margin-bottom: 30px;
+            text-align: center;
+            border-bottom: 1px solid #2a2a2a;
+            padding-bottom: 20px;
+        }
+        
+        .sidebar-header h2 {
+            color: #fff;
+            font-size: 26px;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        
+        .sidebar-header p {
+            color: #a0a0a0;
+            font-size: 12px;
+        }
+        
+        .sidebar-menu {
+            list-style: none;
+        }
+        
+        .sidebar-menu li {
+            margin-bottom: 10px;
+        }
+        
+        .sidebar-menu a {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px 15px;
+            color: #a0a0a0;
+            text-decoration: none;
+            border-radius: 6px;
+            transition: 0.3s;
+            font-size: 14px;
+            font-weight: 500;
+        }
+        
+        .sidebar-menu a:hover {
+            background: #252525;
+            color: #1e90ff;
+        }
+        
+        .sidebar-menu a.active {
+            background: #1e90ff;
+            color: #fff;
+        }
+        
+        .sidebar-menu .icon {
+            font-size: 18px;
+            width: 20px;
+            text-align: center;
+        }
+        
+        .sidebar-divider {
+            height: 1px;
+            background: #2a2a2a;
+            margin: 20px 0;
+        }
+        
+        .sidebar-footer {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #2a2a2a;
+        }
+        
+        .sidebar-footer .user-section {
+            font-size: 12px;
+            color: #a0a0a0;
+            margin-bottom: 15px;
+            text-align: center;
+        }
+        
+        .sidebar-footer form button {
+            width: 100%;
+            padding: 10px;
+            background: #dc3545;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
+            transition: 0.3s;
+        }
+        
+        .sidebar-footer form button:hover {
+            background: #c82333;
+        }
+        
+        /* MAIN CONTENT */
+        .main-content {
+            flex: 1;
+            margin-left: 280px;
+            padding: 20px;
+            overflow-y: auto;
+            height: 100vh;
+        }
+        
+        .top-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+        
+        .top-bar h1 {
+            color: #fff;
+            font-size: 24px;
+        }
+        
+        .user-info {
+            background: #252525;
+            padding: 10px 15px;
+            border-radius: 6px;
+            font-size: 13px;
+            color: #a0a0a0;
+            border: 1px solid #333;
+        }
+        
+        .menu-toggle {
+            display: none;
+            background: #1e90ff;
+            color: white;
+            border: none;
+            padding: 10px 15px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 18px;
+        }
+        
+        /* ALERTS */
+        .alerts {
+            margin-bottom: 20px;
+        }
+        
+        .alert {
+            padding: 15px;
+            border-radius: 6px;
+            border-left: 4px solid;
+            margin-bottom: 10px;
+            font-size: 13px;
+        }
+        
+        .alert-success {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+            border-left-color: #28a745;
+        }
+        
+        .alert-danger {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+            border-left-color: #dc3545;
+        }
+        
+        /* FILTROS */
+        .filtros {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+            margin-bottom: 25px;
+        }
+        
+        .filtro-grupo label {
+            font-size: 12px;
+            color: #a0a0a0;
+            margin-bottom: 5px;
+            font-weight: 600;
+            display: block;
+        }
+        
+        .filtro-grupo input {
+            padding: 8px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 13px;
+            background: #252525;
+            color: #e0e0e0;
+            width: 100%;
+        }
+        
+        .filtro-grupo input:focus {
+            outline: none;
+            border-color: #1e90ff;
+            box-shadow: 0 0 0 3px rgba(30, 144, 255, 0.1);
+        }
+        
+        .btn-filtrar {
+            padding: 8px 15px;
+            background: #1e90ff;
+            color: white;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 13px;
+            align-self: flex-end;
+            transition: 0.3s;
+        }
+        
+        .btn-filtrar:hover {
+            background: #0d78d9;
+        }
+        
+        /* CARDS GRID */
+        .cards-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+        
+        .card {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            transition: 0.3s;
+        }
+        
+        .card:hover {
+            border-color: #1e90ff;
+            box-shadow: 0 4px 12px rgba(30, 144, 255, 0.1);
+        }
+        
+        .card h3 {
+            color: #a0a0a0;
+            font-size: 12px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        
+        .card .value {
+            font-size: 28px;
+            font-weight: bold;
+            color: #fff;
+            margin-bottom: 10px;
+        }
+        
+        .card .status {
+            font-size: 11px;
+            padding: 6px 10px;
+            border-radius: 4px;
+            text-align: center;
+            font-weight: 600;
+        }
+        
+        .excelente {
+            border-left: 4px solid #28a745;
+        }
+        
+        .excelente .value {
+            color: #28a745;
+        }
+        
+        .excelente .status {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+        }
+        
+        .malo {
+            border-left: 4px solid #dc3545;
+        }
+        
+        .malo .value {
+            color: #dc3545;
+        }
+        
+        .malo .status {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+        }
+        
+        /* EVA */
+        .eva-container {
+            background: #1a1a1a;
+            padding: 25px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            margin-bottom: 25px;
+            text-align: center;
+        }
+        
+        .eva-container h3 {
+            color: #a0a0a0;
+            font-size: 12px;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+        }
+        
+        .eva-value {
+            font-size: 36px;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        
+        .eva-status {
+            font-size: 12px;
+            padding: 8px 15px;
+            border-radius: 4px;
+            display: inline-block;
+            font-weight: 600;
+        }
+        
+        .eva-excelente {
+            border-left: 4px solid #28a745;
+        }
+        
+        .eva-excelente .eva-value {
+            color: #28a745;
+        }
+        
+        .eva-excelente .eva-status {
+            background: rgba(40, 167, 69, 0.1);
+            color: #28a745;
+        }
+        
+        .eva-malo {
+            border-left: 4px solid #dc3545;
+        }
+        
+        .eva-malo .eva-value {
+            color: #dc3545;
+        }
+        
+        .eva-malo .eva-status {
+            background: rgba(220, 53, 69, 0.1);
+            color: #dc3545;
+        }
+        
+        /* CONTENEDOR 2 COLUMNAS */
+        .content-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            margin-bottom: 25px;
+        }
+        
+        .seccion {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+        }
+        
+        .seccion h2 {
+            color: #fff;
+            margin-bottom: 15px;
+            font-size: 16px;
+            border-bottom: 1px solid #2a2a2a;
+            padding-bottom: 10px;
+        }
+        
+        .grafico-container {
+            background: #252525;
+            padding: 15px;
+            border-radius: 8px;
+            border: 1px solid #333;
+        }
+        
+        .grafico-container h3 {
+            text-align: center;
+            color: #e0e0e0;
+            margin-bottom: 15px;
+            font-size: 14px;
+        }
+        
+        /* TABLA */
+        .tabla-movimientos {
+            overflow-x: auto;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        
+        table th, table td {
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #2a2a2a;
+            font-size: 12px;
+            color: #e0e0e0;
+        }
+        
+        table th {
+            background: #252525;
+            color: #a0a0a0;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+        }
+        
+        table tr:hover {
+            background: #252525;
+        }
+        
+        .monto-positivo {
+            color: #28a745;
+            font-weight: 600;
+        }
+        
+        .monto-negativo {
+            color: #dc3545;
+            font-weight: 600;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 13px;
+        }
+        
+        /* RECOMENDACIONES */
+        .recomendaciones {
+            background: #1a1a1a;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 25px;
+            border: 1px solid #2a2a2a;
+        }
+        
+        .recomendaciones h2 {
+            color: #fff;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+        
+        .recomendacion {
+            padding: 12px;
+            margin: 10px 0;
+            border-radius: 6px;
+            border-left: 4px solid #333;
+            font-size: 12px;
+            background: #252525;
+        }
+        
+        .recomendacion.peligro {
+            background: rgba(220, 53, 69, 0.1);
+            border-left-color: #dc3545;
+            color: #ff6b6b;
+        }
+        
+        .recomendacion.advertencia {
+            background: rgba(255, 193, 7, 0.1);
+            border-left-color: #ffc107;
+            color: #ffd700;
+        }
+        
+        .recomendacion.info {
+            background: rgba(30, 144, 255, 0.1);
+            border-left-color: #1e90ff;
+            color: #1e90ff;
+        }
+        
+        .recomendacion.exito {
+            background: rgba(40, 167, 69, 0.1);
+            border-left-color: #28a745;
+            color: #28a745;
+        }
+        
+        /* RESPONSIVE */
+        @media (max-width: 1024px) {
+            .content-container {
+                grid-template-columns: 1fr;
+            }
+        }
+        
+        @media (max-width: 768px) {
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s;
+                width: 100%;
+                height: 100vh;
+            }
+            
+            .sidebar.active {
+                transform: translateX(0);
+            }
+            
+            .main-content {
+                margin-left: 0;
+            }
+            
+            .menu-toggle {
+                display: block;
+            }
+            
+            .top-bar {
+                flex-wrap: wrap;
+                gap: 15px;
+            }
+            
+            .top-bar h1 {
+                font-size: 20px;
+            }
+            
+            .cards-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .content-container {
+                grid-template-columns: 1fr;
+            }
+            
+            .card .value {
+                font-size: 24px;
+            }
+            
+            .filtros {
+                grid-template-columns: 1fr;
+            }
+            
+            table {
+                font-size: 11px;
+            }
+            
+            table th, table td {
+                padding: 8px 5px;
+            }
+        }
+        
+        @media (max-width: 480px) {
+            .main-content {
+                padding: 10px;
+            }
+            
+            .top-bar {
+                padding: 15px;
+            }
+            
+            .top-bar h1 {
+                font-size: 18px;
+            }
+            
+            .sidebar-header h2 {
+                font-size: 22px;
+            }
+            
+            .cards-grid {
+                gap: 10px;
+            }
+            
+            .card {
+                padding: 15px;
+            }
+            
+            .eva-value {
+                font-size: 28px;
+            }
+            
+            .seccion {
+                padding: 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- SIDEBAR -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <h2>{{ current_user.empresa.nombre }}</h2>
+            <p>Control Financiero</p>
+        </div>
+        
+        <ul class="sidebar-menu">
+            <li><a href="{{ url_for('dashboard') }}" class="active"><span class="icon"></span> Dashboard</a></li>
+            <li><a href="{{ url_for('nuevo_gasto') }}"><span class="icon"></span> Nuevo Gasto</a></li>
+            <li><a href="{{ url_for('nuevo_ingreso') }}"><span class="icon"></span> Nuevo Ingreso</a></li>
+            <li><a href="{{ url_for('listar_gastos') }}"><span class="icon"></span> Ver Gastos</a></li>
+            <li><a href="{{ url_for('listar_ingresos') }}"><span class="icon"></span> Ver Ingresos</a></li>
+            <li><a href="{{ url_for('ver_historial') }}"><span class="icon"></span> Historial</a></li>
+            <li><a href="{{ url_for('listar_categorias') }}"><span class="icon"></span>Categorías</a></li>
+            <li><a href="{{ url_for('config_eva') }}"><span class="icon"></span> Configuración</a></li>
+        </ul>
+        
+        <div class="sidebar-footer">
+            <div class="user-section">
+                {{ usuario.nombre }}<br>
+                <span style="font-size: 11px;">({{ usuario.rol.upper() }})</span>
+            </div>
+            <form method="GET" action="{{ url_for('logout') }}">
+                <button type="submit">Salir</button>
+            </form>
+        </div>
+    </div>
+    
+    <!-- MAIN CONTENT -->
+    <div class="main-content" id="mainContent">
+        <!-- TOP BAR -->
+        <div class="top-bar">
+            <div>
+                <button class="menu-toggle" id="menuToggle">☰ Menú</button>
+                <h1>Dashboard Financiero</h1>
+            </div>
+            <div class="user-info">
+                {{ usuario.nombre }} ({{ usuario.rol.upper() }})
+            </div>
+        </div>
+        
+        <!-- ALERTS -->
+        {% if get_flashed_messages() %}
+            <div class="alerts">
+                {% for category, message in get_flashed_messages(with_categories=true) %}
+                    {% if category == 'success' %}
+                        <div class="alert alert-success">✅ {{ message }}</div>
+                    {% else %}
+                        <div class="alert alert-danger">❌ {{ message }}</div>
+                    {% endif %}
+                {% endfor %}
+            </div>
+        {% endif %}
+        
+        <!-- CARDS PRINCIPALES - FILA 1 -->
+        <div class="cards-grid">
+            <div class="card excelente">
+                <h3>Ingresos Totales</h3>
+                <div class="value">${{ "%.0f"|format(analisis.ingresos) }}</div>
+                <div class="status">Dinero recibido</div>
+            </div>
+    
+            <div class="card malo">
+                <h3>Gastos Totales</h3>
+                <div class="value">${{ "%.0f"|format(analisis.gastos) }}</div>
+                <div class="status">Dinero gastado</div>
+            </div>
+    
+            <div class="card {% if analisis.utilidad_neta > 0 %}excelente{% else %}malo{% endif %}">
+                <h3>Ganancia Neta</h3>
+                <div class="value">${{ "%.0f"|format(analisis.utilidad_neta) }}</div>
+                <div class="status">Ganancia real</div>
+            </div>
+        </div>
+
+        <!-- CARDS PRINCIPALES - FILA 2 (Métricas) -->
+        <div class="cards-grid">
+            <div class="card {% if analisis.margen_estado[0] == 'excelente' %}excelente{% else %}malo{% endif %}">
+                <h3>Margen %</h3>
+                <div class="value">{{ "%.1f"|format(analisis.margen_ganancia) }}%</div>
+                <div class="status">{{ analisis.margen_estado[1] }}</div>
+            </div>
+    
+            <div class="card {% if analisis.roi >= 15 %}excelente{% else %}malo{% endif %}">
+                <h3>ROI %</h3>
+                <div class="value">{{ "%.1f"|format(analisis.roi) }}%</div>
+                <div class="status">{{ analisis.roi_estado[1] }}</div>
+            </div>
+    
+            <div class="card {% if analisis.eva > 0 %}excelente{% else %}malo{% endif %}">
+                <h3>EVA - Valor Económico Agregado</h3>
+                <div class="value">${{ "%.0f"|format(analisis.eva) }}</div>
+                <div class="eva-status" style="margin-top: 5px;">{{ analisis.eva_estado[1] }}</div>
+            </div>
+        </div>
+        
+        <!-- GRÁFICOS -->
+        <div class="content-container">
+            <div class="seccion">
+                <h2>Gastos por Categoría</h2>
+                <div class="grafico-container">
+                    <canvas id="chartGastos"></canvas>
+                </div>
+            </div>
+            
+            <div class="seccion">
+                <h2>Ingresos por Categoría</h2>
+                <div class="grafico-container">
+                    <canvas id="chartIngresos"></canvas>
+                </div>
+            </div>
+        </div>
+        
+        <!-- ÚLTIMOS MOVIMIENTOS -->
+        <div class="seccion" style="margin-bottom: 25px;">
+            <h2>Últimos Movimientos</h2>
+            <div class="tabla-movimientos">
+                {% if gastos_recientes or ingresos_recientes %}
+                    <table>
+                        <tr>
+                            <th>Fecha</th>
+                            <th>Tipo</th>
+                            <th>Descripción</th>
+                            <th>Categoría</th>
+                            <th style="text-align: right;">Monto</th>
+                        </tr>
+                        {% for gasto in gastos_recientes[:5] %}
+                            <tr>
+                                <td>{{ gasto.fecha.strftime('%d/%m/%Y') }}</td>
+                                <td><span style="color: #dc3545; font-weight: 600;">Gasto</span></td>
+                                <td>{{ gasto.descripcion[:20] }}...</td>
+                                <td>{{ gasto.categoria.nombre if gasto.categoria else '-' }}</td>
+                                <td style="text-align: right;"><span class="monto-negativo">-${{ "%.0f"|format(gasto.monto) }}</span></td>
+                            </tr>
+                        {% endfor %}
+                        {% for ingreso in ingresos_recientes[:5] %}
+                            <tr>
+                                <td>{{ ingreso.fecha.strftime('%d/%m/%Y') }}</td>
+                                <td><span style="color: #28a745; font-weight: 600;">Ingreso</span></td>
+                                <td>{{ ingreso.descripcion[:20] }}...</td>
+                                <td>{{ ingreso.categoria.nombre if ingreso.categoria else '-' }}</td>
+                                <td style="text-align: right;"><span class="monto-positivo">+${{ "%.0f"|format(ingreso.monto) }}</span></td>
+                            </tr>
+                        {% endfor %}
+                    </table>
+                {% else %}
+                    <div class="empty-state">
+                        <p>No hay movimientos registrados aún</p>
+                    </div>
+                {% endif %}
+            </div>
+        </div>
+        
+        <!-- RECOMENDACIONES -->
+        {% if analisis.recomendaciones %}
+        <div class="recomendaciones">
+            <h2>Recomendaciones</h2>
+            {% for rec in analisis.recomendaciones %}
+                <div class="recomendacion {{ rec.tipo }}">
+                    {{ rec.mensaje }}
+                </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </div>
+    
+    <script>
+        const menuToggle = document.getElementById('menuToggle');
+        const sidebar = document.getElementById('sidebar');
+        
+        menuToggle.addEventListener('click', function() {
+            sidebar.classList.toggle('active');
+        });
+        
+        document.querySelectorAll('.sidebar-menu a').forEach(link => {
+            link.addEventListener('click', function() {
+                if (window.innerWidth <= 768) {
+                    sidebar.classList.remove('active');
+                }
+            });
+        });
+        
+        // GRÁFICOS
+        const gastosLabels = {{ (gastos_cat.keys() | list) | tojson }};
+        const gastosValues = {{ (gastos_cat.values() | list) | tojson }};
+        
+        const gastosData = {
+            labels: gastosLabels,
+            datasets: [{
+                label: 'Gastos ($)',
+                data: gastosValues,
+                backgroundColor: ['#dc3545', '#fd7e14', '#ffc107', '#6c757d', '#20c997', '#17a2b8'],
+                borderColor: '#1a1a1a',
+                borderWidth: 2
+            }]
+        };
+        
+        const ctxGastos = document.getElementById('chartGastos').getContext('2d');
+        new Chart(ctxGastos, {
+            type: 'doughnut',
+            data: gastosData,
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'bottom', labels: { font: { size: 11 }, color: '#a0a0a0' } }
+                }
+            }
+        });
+        
+        const ingresosLabels = {{ (ingresos_cat.keys() | list) | tojson }};
+        const ingresosValues = {{ (ingresos_cat.values() | list) | tojson }};
+        
+        const ingresosData = {
+            labels: ingresosLabels,
+            datasets: [{
+                label: 'Ingresos ($)',
+                data: ingresosValues,
+                backgroundColor: ['#28a745', '#20c997', '#17a2b8', '#007bff', '#0066cc', '#6f42c1'],
+                borderColor: '#1a1a1a',
+                borderWidth: 2
+            }]
+        };
+        
+        const ctxIngresos = document.getElementById('chartIngresos').getContext('2d');
+        new Chart(ctxIngresos, {
+            type: 'doughnut',
+            data: ingresosData,
+            options: {
+                responsive: true,
+                plugins: {
+                    legend: { position: 'bottom', labels: { font: { size: 11 }, color: '#a0a0a0' } }
+                }
+            }
+        });
+    </script>
+</body>
+</html>

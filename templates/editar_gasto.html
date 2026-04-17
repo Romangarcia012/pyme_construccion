@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Editar Gasto - PYME</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 500px;
+            margin: 0 auto;
+        }
+        
+        .form-card {
+            background: #1a1a1a;
+            padding: 30px;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+        }
+        
+        h1 {
+            color: #fff;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        
+        .form-group {
+            margin-bottom: 20px;
+        }
+        
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #e0e0e0;
+            font-weight: 600;
+            font-size: 14px;
+        }
+        
+        input, select, textarea {
+            width: 100%;
+            padding: 12px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            font-size: 14px;
+            transition: 0.3s;
+            font-family: inherit;
+            background: #252525;
+            color: #e0e0e0;
+        }
+        
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #1e90ff;
+            box-shadow: 0 0 0 3px rgba(30, 144, 255, 0.1);
+        }
+        
+        textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+        
+        .form-row {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+        }
+        
+        .botones {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-top: 25px;
+        }
+        
+        .botones button {
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: 0.3s;
+            text-decoration: none;
+            text-align: center;
+            width: 100%;
+        }
+        
+        .btn-guardar {
+            background: #28a745;
+            color: white;
+        }
+        
+        .btn-guardar:hover {
+            background: #20c997;
+            box-shadow: 0 4px 12px rgba(40, 167, 69, 0.2);
+        }
+        
+        .btn-cancelar {
+            background: #444;
+            color: #e0e0e0;
+        }
+        
+        .btn-cancelar:hover {
+            background: #555;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+        
+        .alerta {
+            background: rgba(255, 193, 7, 0.1);
+            border: 1px solid #ffc107;
+            color: #ffd700;
+            padding: 12px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            font-size: 14px;
+        }
+        
+        @media (max-width: 600px) {
+            .form-card {
+                padding: 20px;
+            }
+            
+            .form-row, .botones {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="form-card">
+            <h1>Editar Gasto</h1>
+            
+            <div class="info-box">
+                Registrado: {{ gasto.fecha.strftime('%d/%m/%Y') }}
+            </div>
+            
+            <form method="POST">
+                <div class="form-group">
+                    <label for="descripcion">Descripción</label>
+                    <textarea name="descripcion" id="descripcion" required>{{ gasto.descripcion }}</textarea>
+                </div>
+                
+                <div class="form-group">
+                    <label for="monto">Monto ($)</label>
+                    <input type="number" name="monto" id="monto" step="0.01" min="0" required value="{{ gasto.monto }}" autocomplete="off">
+                </div>
+                
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="categoria_id">Categoría</label>
+                        <select name="categoria_id" id="categoria_id" required autocomplete="off">
+                            {% for cat in categorias %}
+                                <option value="{{ cat.id }}" {% if cat.id == gasto.categoria_id %}selected{% endif %}>{{ cat.nombre }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    
+                    <div class="form-group">
+                        <label for="pagado_por_id">Pagado por</label>
+                        <select name="pagado_por_id" id="pagado_por_id" required autocomplete="off">
+                            {% for usr in usuarios %}
+                                <option value="{{ usr.id }}" {% if usr.id == gasto.pagado_por_id %}selected{% endif %}>{{ usr.nombre }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                </div>
+                
+                <div class="botones">
+                    <button type="submit" class="btn-guardar">Guardar Gasto</button>
+                    <button type="button" class="btn-cancelar" onclick="window.location.href='{{ url_for('dashboard') }}'">Cancelar</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
