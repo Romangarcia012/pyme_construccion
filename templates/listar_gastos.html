@@ -326,7 +326,6 @@
                                 <td>{{ gasto.descripcion }}</td>
                                 <td><strong>${{ "%.2f"|format(gasto.monto) }}</strong></td>
                                 <td>{{ gasto.categoria.nombre }}</td>
-                                <td>{{ gasto.pagado_por.nombre }}</td>
                                 <td>
                                     <div class="acciones">
                                         <a href="{{ url_for('editar_gasto', id=gasto.id) }}" class="btn-editar">Editar</a>
