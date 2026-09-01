@@ -163,15 +163,6 @@
                             {% endfor %}
                         </select>
                     </div>
-                    
-                    <div class="form-group">
-                        <label for="pagado_por_id">Pagado por</label>
-                        <select name="pagado_por_id" id="pagado_por_id" required autocomplete="off">
-                            {% for usr in usuarios %}
-                                <option value="{{ usr.id }}" {% if usr.id == gasto.pagado_por_id %}selected{% endif %}>{{ usr.nombre }}</option>
-                            {% endfor %}
-                        </select>
-                    </div>
                 </div>
                 
                 <div class="botones">
