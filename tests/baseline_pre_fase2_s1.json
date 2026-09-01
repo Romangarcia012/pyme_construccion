@@ -1,0 +1,12 @@
+{
+  "_comentario": "Conteo de filas de las 6 tablas originales capturado en vivo contra Supabase INMEDIATAMENTE ANTES de aplicar la migracion 4a3c449fc7b6 (FASE2-S1). alembic_version en ese momento: dfd89229795b. test_fase2_s1.py compara contra estos numeros: si la migracion hubiera tocado datos existentes, el test falla.",
+  "alembic_version_previa": "dfd89229795b",
+  "conteos": {
+    "empresa": 1,
+    "usuario": 1,
+    "categoria": 0,
+    "historial": 0,
+    "gasto": 0,
+    "ingreso": 0
+  }
+}
