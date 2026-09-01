@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Integraciones</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+        }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+        }
+
+        h1 {
+            color: #fff;
+            font-size: 28px;
+        }
+
+        .subtitulo {
+            color: #888;
+            font-size: 14px;
+            margin-top: 6px;
+        }
+
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+
+        .btn-volver:hover {
+            background: #555;
+        }
+
+        .tabla-container {
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            overflow: hidden;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        th {
+            background: #252525;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #fff;
+            border-bottom: 1px solid #333;
+        }
+
+        td {
+            padding: 15px;
+            border-bottom: 1px solid #333;
+            vertical-align: middle;
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        tr:hover {
+            background: #252525;
+        }
+
+        .estado-activo {
+            background: rgba(40, 167, 69, 0.2);
+            color: #51cf66;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .estado-inactivo {
+            background: rgba(255, 255, 255, 0.08);
+            color: #999;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .cuenta {
+            color: #888;
+            font-size: 13px;
+        }
+
+        .btn-conectar {
+            background: #28a745;
+            color: white;
+            padding: 8px 14px;
+            border: none;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+
+        .btn-conectar:hover {
+            background: #20c997;
+        }
+
+        .btn-reconectar {
+            background: #444;
+            color: #e0e0e0;
+            padding: 8px 14px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+
+        .btn-reconectar:hover {
+            background: #555;
+        }
+
+        .btn-proximamente {
+            background: #2a2a2a;
+            color: #777;
+            padding: 8px 14px;
+            border: 1px solid #333;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+            cursor: not-allowed;
+        }
+
+        @media (max-width: 768px) {
+            table { font-size: 14px; }
+            th, td { padding: 10px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('dashboard') }}" class="btn-volver">← Volver al Dashboard</a>
+
+        <div class="header">
+            <div>
+                <h1>Integraciones</h1>
+                <p class="subtitulo">Canales de venta conectados a tu empresa</p>
+            </div>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div style="padding: 15px; margin-bottom: 20px; border-radius: 6px; border-left: 4px solid {% if category == 'success' %}#28a745{% else %}#dc3545{% endif %}; background: {% if category == 'success' %}rgba(40, 167, 69, 0.1){% else %}rgba(220, 53, 69, 0.1){% endif %}; color: {% if category == 'success' %}#51cf66{% else %}#ff6b6b{% endif %};">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <div class="tabla-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Canal</th>
+                        <th>Estado</th>
+                        <th>Cuenta conectada</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for canal in canales %}
+                        <tr>
+                            <td>{{ canal.nombre }}</td>
+                            <td>
+                                {% if canal.activo %}
+                                    <span class="estado-activo">Conectado</span>
+                                {% else %}
+                                    <span class="estado-inactivo">Sin conectar</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if canal.activo %}
+                                    <span class="cuenta">{{ canal.nombre }}{% if canal.cuenta_externa %} (ID {{ canal.cuenta_externa }}){% endif %}</span>
+                                {% else %}
+                                    <span class="cuenta">—</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if canal.endpoint_conectar %}
+                                    <a href="{{ url_for(canal.endpoint_conectar) }}"
+                                       class="{% if canal.activo %}btn-reconectar{% else %}btn-conectar{% endif %}">
+                                        {% if canal.activo %}Reconectar{% else %}Conectar{% endif %}
+                                    </a>
+                                {% else %}
+                                    <span class="btn-proximamente">Próximamente</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</body>
+</html>

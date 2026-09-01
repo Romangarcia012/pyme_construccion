@@ -42,6 +42,13 @@ if not SECRET_KEY:
         "antes de arrancar la aplicacion."
     )
 app.config['SECRET_KEY'] = SECRET_KEY
+
+# CIFRADO DE CREDENCIALES DE CANALES (FASE3-S1)
+# Mismo criterio que SECRET_KEY: sin clave la app no arranca. El fallback
+# silencioso seria guardar tokens de Tiendanube en texto plano.
+import cripto
+cripto.verificar_clave_configurada()
+
 # BASE DE DATOS
 # En produccion (Render) se define DATABASE_URL apuntando a Postgres.
 # Sin esa variable, se cae al SQLite local para desarrollo.
@@ -74,6 +81,10 @@ print("="*60 + "\n")
 mail = Mail(app)
 db.init_app(app)
 migrate = Migrate(app, db)  # El esquema lo maneja Alembic, no db.create_all()
+
+# INTEGRACIONES CON CANALES DE VENTA (FASE3-S1)
+from rutas_integraciones import integraciones_bp
+app.register_blueprint(integraciones_bp)
 
 @app.route('/')
 def index():
