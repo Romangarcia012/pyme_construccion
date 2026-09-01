@@ -1,7 +1,15 @@
 """Contrato de ingesta de canales de venta.
 
-FASE2-S1: esto es SOLO el contrato. No hay ninguna implementacion contra
-Tiendanube ni Mercado Libre todavia -- eso es Fase 3.
+FASE2-S1 definio el contrato. FASE3-S2 escribio la primera implementacion
+(`ingestor_tiendanube.py`, productos y pedidos) y en el camino lo extendio en
+tres puntos, marcados abajo con "FASE3-S2":
+
+    - ENTIDAD_ITEM, para las lineas de pedido.
+    - IngestorCanal.id_tienda_externo, que antes habia que colar en
+      `credenciales`.
+    - variantes_de_producto(), porque un producto del canal puede ser N SKUs.
+
+Los pagos y las liquidaciones siguen sin implementacion: eso es FASE3-S3.
 
 La idea es que cada canal (Tiendanube, Mercado Libre) y cada procesador de
 cobro (Mercado Pago, Tiendanube Pagos) exponga la misma forma, para que el
@@ -36,6 +44,11 @@ ENTIDAD_PAGO = 'pago'
 ENTIDAD_LIQUIDACION = 'liquidacion'
 ENTIDAD_MOVIMIENTO = 'movimiento'
 ENTIDAD_PRODUCTO = 'producto'
+# FASE3-S2: las lineas del pedido tambien necesitan normalizarse (cantidad y
+# precio_unitario son Decimal, y el sku externo hay que resolverlo contra
+# mapeo_producto_canal). Sin esta entidad, el mapeo de items terminaba
+# escondido dentro del de 'pedido' y no se podia testear por separado.
+ENTIDAD_ITEM = 'item'
 
 ENTIDADES_VALIDAS = (
     ENTIDAD_PEDIDO,
@@ -43,6 +56,7 @@ ENTIDADES_VALIDAS = (
     ENTIDAD_LIQUIDACION,
     ENTIDAD_MOVIMIENTO,
     ENTIDAD_PRODUCTO,
+    ENTIDAD_ITEM,
 )
 
 
@@ -90,11 +104,18 @@ class IngestorCanal(ABC):
     #: 'tiendanube' | 'mercadolibre'. Debe coincidir con canal_venta.tipo.
     tipo_canal: str = ''
 
-    def __init__(self, canal_id: int, credenciales: Optional[Dict[str, Any]] = None):
+    def __init__(self, canal_id: int, credenciales: Optional[Dict[str, Any]] = None,
+                 id_tienda_externo: Optional[str] = None):
         #: id de la fila en canal_venta que este ingestor representa.
         self.canal_id = canal_id
         #: tokens ya descifrados. Nunca se loguean.
         self.credenciales = credenciales or {}
+        # FASE3-S2: todo canal tiene un id de cuenta/tienda del lado del
+        # proveedor y va en la URL de cada request (Tiendanube:
+        # /2025-03/{store_id}/orders). Antes habia que meterlo a mano dentro
+        # de `credenciales`, que esta documentado como "solo tokens".
+        #: canal_venta.id_tienda_externo. Publico, no es un secreto.
+        self.id_tienda_externo = id_tienda_externo
 
     # -- Lectura --------------------------------------------------------
 
@@ -139,8 +160,29 @@ class IngestorCanal(ABC):
         return []
 
     def traer_productos(self) -> Iterable[Dict[str, Any]]:
-        """Catalogo publicado en el canal, para armar mapeo_producto_canal."""
+        """Catalogo publicado en el canal, para armar mapeo_producto_canal.
+
+        FASE3-S2: sigue siendo opcional en el contrato (un procesador de pagos
+        puro no tiene catalogo), pero para un canal de venta es obligatorio en
+        los hechos: sin mapeo_producto_canal, las lineas de pedido no se
+        pueden asociar a un Producto y el margen queda sin calcular.
+        """
         return []
+
+    def variantes_de_producto(self, crudo: Dict[str, Any]) -> Iterable[Dict[str, Any]]:
+        """Parte un producto crudo en un crudo por SKU vendible.
+
+        FASE3-S2. Hace falta porque la granularidad del canal no es la del
+        modelo: Tiendanube devuelve UN producto con N variantes (talle/color),
+        cada una con su id, su sku y su precio, y cada una de esas es una fila
+        de `producto` mas una de `mapeo_producto_canal`. normalizar() esta
+        documentado como 1 crudo -> 1 dict, asi que la explosion 1 -> N tiene
+        que pasar antes y quedar explicita, no escondida adentro del mapeo.
+
+        El default sirve para canales sin variantes: el producto es su propio
+        SKU. Los dicts que devuelve se le pasan a normalizar(ENTIDAD_PRODUCTO).
+        """
+        return [crudo]
 
     def hash_movimiento(self, crudo: Dict[str, Any]) -> str:
         """Huella estable de un movimiento, para movimiento_cuenta.hash_dedup.

@@ -1,7 +1,9 @@
-"""Rutas de integraciones con canales de venta (FASE3-S1).
+"""Rutas de integraciones con canales de venta.
 
-Solo autenticacion: conectar la tienda y guardar el token cifrado. Traer
-pedidos y pagos es FASE3-S2.
+FASE3-S1: conectar la tienda y guardar el token cifrado (OAuth).
+FASE3-S2: disparar el backfill de productos y pedidos y mostrar como salio.
+
+Los pagos siguen sin tocarse: eso es FASE3-S3.
 
 El blueprint se registra en app.py; ninguna ruta existente se toca.
 """
@@ -9,11 +11,20 @@ El blueprint se registra en app.py; ninguna ruta existente se toca.
 import sys
 from datetime import datetime
 
-from flask import Blueprint, flash, redirect, render_template, request, url_for
+from flask import (
+    Blueprint,
+    current_app,
+    flash,
+    redirect,
+    render_template,
+    request,
+    url_for,
+)
 from flask_login import current_user, login_required
 
 import cripto
 import integracion_tiendanube as tn
+import sync_tiendanube
 from models import CanalVenta, CredencialCanal, db
 
 integraciones_bp = Blueprint('integraciones', __name__, url_prefix='/integraciones')
@@ -24,9 +35,11 @@ TIPO_TIENDANUBE = 'tiendanube'
 # None mientras el canal no tenga flujo de conexion implementado.
 CANALES_CONOCIDOS = [
     {'tipo': TIPO_TIENDANUBE, 'nombre': 'Tiendanube',
-     'endpoint_conectar': 'integraciones.conectar_tiendanube'},
+     'endpoint_conectar': 'integraciones.conectar_tiendanube',
+     'endpoint_sincronizar': 'integraciones.sincronizar_tiendanube'},
     {'tipo': 'mercadolibre', 'nombre': 'Mercado Libre',
-     'endpoint_conectar': None},
+     'endpoint_conectar': None,
+     'endpoint_sincronizar': None},
 ]
 
 
@@ -69,6 +82,16 @@ def listar():
     canales = []
     for conocido in CANALES_CONOCIDOS:
         fila = por_tipo.get(conocido['tipo'])
+
+        # El estado del sync solo aplica al canal ya conectado. Consultarlo
+        # tambien cierra las corridas que quedaron huerfanas por un reinicio,
+        # asi que abrir la pagina destraba el boton sin intervencion manual.
+        sync = None
+        corriendo = False
+        if fila is not None and fila.activo and conocido['endpoint_sincronizar']:
+            corriendo = sync_tiendanube.sync_en_curso(fila.id) is not None
+            sync = sync_tiendanube.ultimo_sync(fila.id)
+
         canales.append({
             'tipo': conocido['tipo'],
             # Si esta conectado, el nombre guardado es el de la tienda real.
@@ -77,6 +100,9 @@ def listar():
             'cuenta_externa': fila.id_tienda_externo if fila else None,
             'ultima_sync': fila.fecha_ultima_sync if fila else None,
             'endpoint_conectar': conocido['endpoint_conectar'],
+            'endpoint_sincronizar': conocido['endpoint_sincronizar'],
+            'sync': sync,
+            'sync_corriendo': corriendo,
         })
 
     return render_template('integraciones.html', canales=canales)
@@ -150,4 +176,43 @@ def callback_tiendanube():
         return redirect(url_for('integraciones.listar'))
 
     flash(f'Tiendanube conectada: {nombre_tienda}.', 'success')
+    return redirect(url_for('integraciones.listar'))
+
+
+@integraciones_bp.route('/tiendanube/sincronizar', methods=['POST'])
+@login_required
+def sincronizar_tiendanube():
+    """Dispara el backfill de productos y pedidos (FASE3-S2).
+
+    Responde de inmediato: el trabajo real corre en un thread daemon con su
+    propio app_context (ver sync_tiendanube.py). Nunca se le pega a la API de
+    Tiendanube dentro del ciclo request/response -- un backfill de varias
+    paginas dejaria al worker de gunicorn colgado y al navegador esperando.
+
+    Es POST y no GET a proposito: dispara trabajo, asi que no puede caer por
+    un prefetch del navegador ni quedar en el historial como link.
+
+    Sin restriccion de rol: cualquier usuario logueado de la empresa puede
+    sincronizar. La operacion no destruye nada (es un upsert idempotente) y el
+    canal ya lo conecto un admin; pedir rol admin aca solo agregaria una
+    puerta que no protege nada nuevo.
+    """
+    canal = _canal(TIPO_TIENDANUBE)
+    if canal is None or not canal.activo:
+        flash('Primero conectá la tienda de Tiendanube.', 'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    # El thread sobrevive al request, asi que no puede quedarse con el proxy de
+    # current_app: necesita el objeto Flask real para abrir su propio contexto.
+    app_obj = current_app._get_current_object()
+
+    try:
+        arranco, mensaje = sync_tiendanube.lanzar_backfill(app_obj, canal.id)
+    except Exception as exc:
+        db.session.rollback()
+        _log(f'no se pudo lanzar el backfill de Tiendanube: {exc!r}')
+        flash('No se pudo iniciar la sincronización. Probá de nuevo.', 'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    flash(mensaje, 'success' if arranco else 'danger')
     return redirect(url_for('integraciones.listar'))

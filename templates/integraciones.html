@@ -159,6 +159,53 @@
             cursor: not-allowed;
         }
 
+        /* --- FASE3-S2: sincronizacion --- */
+        .acciones {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .form-sync { display: inline; }
+
+        .btn-sync {
+            background: #0d6efd;
+            color: white;
+            padding: 8px 14px;
+            border: none;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+
+        .btn-sync:hover { background: #3d8bfd; }
+
+        .btn-sync:disabled {
+            background: #2a2a2a;
+            color: #777;
+            border: 1px solid #333;
+            cursor: not-allowed;
+        }
+
+        .sync-estado { font-size: 13px; line-height: 1.6; }
+        .sync-nunca { color: #888; }
+        .sync-detalle { color: #888; font-size: 12px; }
+        .sync-ok { color: #51cf66; font-weight: 600; }
+        .sync-error { color: #ff6b6b; font-weight: 600; }
+        .sync-parcial { color: #ffd43b; font-weight: 600; }
+        .sync-corriendo { color: #4dabf7; font-weight: 600; }
+
+        .sync-mensaje {
+            color: #ffd43b;
+            font-size: 12px;
+            display: block;
+            max-width: 320px;
+        }
+
         @media (max-width: 768px) {
             table { font-size: 14px; }
             th, td { padding: 10px; }
@@ -193,6 +240,7 @@
                         <th>Canal</th>
                         <th>Estado</th>
                         <th>Cuenta conectada</th>
+                        <th>Última sincronización</th>
                         <th>Acciones</th>
                     </tr>
                 </thead>
@@ -214,15 +262,63 @@
                                     <span class="cuenta">—</span>
                                 {% endif %}
                             </td>
-                            <td>
-                                {% if canal.endpoint_conectar %}
-                                    <a href="{{ url_for(canal.endpoint_conectar) }}"
-                                       class="{% if canal.activo %}btn-reconectar{% else %}btn-conectar{% endif %}">
-                                        {% if canal.activo %}Reconectar{% else %}Conectar{% endif %}
-                                    </a>
+                            <td class="sync-estado">
+                                {% if not canal.activo %}
+                                    <span class="sync-nunca">—</span>
+                                {% elif canal.sync_corriendo %}
+                                    <span class="sync-corriendo">Sincronizando…</span><br>
+                                    <span class="sync-detalle">
+                                        Empezó {{ canal.sync.inicio.strftime('%d/%m/%Y %H:%M') }} UTC.
+                                        Actualizá la página para ver el resultado.
+                                    </span>
+                                {% elif canal.sync %}
+                                    {% if canal.sync.estado == 'ok' %}
+                                        <span class="sync-ok">Última sync OK</span>
+                                    {% elif canal.sync.estado == 'error' %}
+                                        <span class="sync-error">Última sync falló</span>
+                                    {% else %}
+                                        <span class="sync-parcial">Última sync con avisos</span>
+                                    {% endif %}
+                                    <br>
+                                    <span class="sync-detalle">
+                                        {{ (canal.sync.fin or canal.sync.inicio).strftime('%d/%m/%Y %H:%M') }} UTC ·
+                                        {{ canal.sync.productos.leidos }} producto(s)
+                                        ({{ canal.sync.productos.nuevos }} nuevo/s) ·
+                                        {{ canal.sync.pedidos.leidos }} pedido(s)
+                                        ({{ canal.sync.pedidos.nuevos }} nuevo/s)
+                                    </span>
+                                    {% if canal.sync.mensaje_error %}
+                                        <span class="sync-mensaje">{{ canal.sync.mensaje_error }}</span>
+                                    {% endif %}
                                 {% else %}
-                                    <span class="btn-proximamente">Próximamente</span>
+                                    <span class="sync-nunca">Nunca se sincronizó</span>
                                 {% endif %}
+                            </td>
+                            <td>
+                                <div class="acciones">
+                                    {% if canal.endpoint_conectar %}
+                                        <a href="{{ url_for(canal.endpoint_conectar) }}"
+                                           class="{% if canal.activo %}btn-reconectar{% else %}btn-conectar{% endif %}">
+                                            {% if canal.activo %}Reconectar{% else %}Conectar{% endif %}
+                                        </a>
+                                    {% else %}
+                                        <span class="btn-proximamente">Próximamente</span>
+                                    {% endif %}
+
+                                    {% if canal.activo and canal.endpoint_sincronizar %}
+                                        <form class="form-sync" method="post"
+                                              action="{{ url_for(canal.endpoint_sincronizar) }}">
+                                            {# Deshabilitado mientras hay una corrida abierta: dos
+                                               backfills en paralelo no duplicarían nada (todo es
+                                               upsert) pero gastarían rate limit al pedo. #}
+                                            <button type="submit" class="btn-sync"
+                                                    {% if canal.sync_corriendo %}disabled
+                                                    title="Ya hay una sincronización en curso"{% endif %}>
+                                                {% if canal.sync_corriendo %}Sincronizando…{% else %}Sincronizar ahora{% endif %}
+                                            </button>
+                                        </form>
+                                    {% endif %}
+                                </div>
                             </td>
                         </tr>
                     {% endfor %}
