@@ -33,7 +33,13 @@ app = Flask(__name__)
 print("\n" + "="*60)
 print("🚀 INICIANDO PYME - SISTEMA DE GESTIÓN FINANCIERA")
 print("="*60)
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'clave_super_secreta_123')
+SECRET_KEY = os.environ.get('SECRET_KEY')
+if not SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY no esta definida. Configurala como variable de entorno "
+        "antes de arrancar la aplicacion."
+    )
+app.config['SECRET_KEY'] = SECRET_KEY
 app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///pyme.db'
 
 # CONFIGURACIÓN DE EMAIL
@@ -123,20 +129,9 @@ def get_id(self):
 
 Usuario.get_id = get_id
 
-@app.before_request
-def crear_tablas():
+# Crear las tablas una sola vez al arrancar, no en cada request
+with app.app_context():
     db.create_all()
-    
-    # Crear usuario admin por defecto
-    if Usuario.query.first() is None:
-        empresa_admin = Empresa(nombre='Administración Sistema')
-        db.session.add(empresa_admin)
-        db.session.flush()
-        
-        admin = Usuario(nombre='Admin', email='admin@pyme.com', rol='admin', empresa_id=empresa_admin.id)
-        admin.set_password('admin123')
-        db.session.add(admin)
-        db.session.commit()
 
 # ======================== AUTENTICACIÓN ========================
 
@@ -717,15 +712,6 @@ def registrar_cambio(usuario_id, accion, tipo, id_registro, descripcion):
     db.session.commit()
 
 # ======================== CATEGORÍAS PERSONALIZABLES ========================
-
-@app.before_request
-def debug_request():
-    if request.path == '/nueva-categoria' and request.method == 'POST':
-        print(f"\n{'='*50}")
-        print(f"NUEVA PETICION A /nueva-categoria")
-        print(f"Method: {request.method}")
-        print(f"X-Requested-With: {request.headers.get('X-Requested-With')}")
-        print(f"{'='*50}\n")
 
 @app.route('/nueva-categoria', methods=['GET', 'POST'])
 @login_required
