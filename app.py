@@ -40,7 +40,21 @@ if not SECRET_KEY:
         "antes de arrancar la aplicacion."
     )
 app.config['SECRET_KEY'] = SECRET_KEY
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///pyme.db'
+# BASE DE DATOS
+# En produccion (Render) se define DATABASE_URL apuntando a Postgres.
+# Sin esa variable, se cae al SQLite local para desarrollo.
+DATABASE_URL = os.environ.get('DATABASE_URL')
+app.config['SQLALCHEMY_DATABASE_URI'] = DATABASE_URL or 'sqlite:///pyme.db'
+
+
+def _ofuscar_uri(uri):
+    """Devuelve la URI de conexion con la password enmascarada, para loguear."""
+    import re
+    return re.sub(r'://([^:/@]+):([^@]+)@', r'://\1:****@', uri)
+
+
+print(f"🗄️  BASE DE DATOS: {_ofuscar_uri(app.config['SQLALCHEMY_DATABASE_URI'])}")
+print(f"🗄️  MOTOR: {'PostgreSQL' if DATABASE_URL else 'SQLite (fallback local)'}")
 
 # CONFIGURACIÓN DE EMAIL
 app.config['MAIL_SERVER'] = 'smtp.gmail.com'
