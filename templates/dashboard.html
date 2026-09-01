@@ -648,7 +648,7 @@
                 {{ usuario.nombre }}<br>
                 <span style="font-size: 11px;">({{ usuario.rol.upper() }})</span>
             </div>
-            <form method="GET" action="{{ url_for('logout') }}">
+            <form method="POST" action="{{ url_for('logout') }}">
                 <button type="submit">Salir</button>
             </form>
         </div>

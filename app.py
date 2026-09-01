@@ -1,8 +1,10 @@
 from flask import Flask, render_template, request, redirect, url_for, session, flash, jsonify
 from flask_login import LoginManager, login_required, current_user, login_user, logout_user
+from flask_migrate import Migrate
 from models import db, Usuario, Categoria, Gasto, Ingreso, Empresa, Historial
 from eva_utils import registrar_cambio, generar_analisis_completo
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from flask_mail import Mail, Message
 from functools import wraps
 import secrets
@@ -71,6 +73,7 @@ print("="*60 + "\n")
 # INICIALIZAR MAIL Y DB
 mail = Mail(app)
 db.init_app(app)
+migrate = Migrate(app, db)  # El esquema lo maneja Alembic, no db.create_all()
 
 @app.route('/')
 def index():
@@ -143,9 +146,6 @@ def get_id(self):
 
 Usuario.get_id = get_id
 
-# Crear las tablas una sola vez al arrancar, no en cada request
-with app.app_context():
-    db.create_all()
 
 # ======================== AUTENTICACIÓN ========================
 
@@ -222,23 +222,6 @@ def verificar_codigo_reset():
             flash('Codigo incorrecto.', 'danger')
     
     return render_template('verificar_codigo_reset.html', email=session.get('email_reset'))
-
-@app.route('/verificar', methods=['GET', 'POST'])
-def verificar():
-    if request.method == 'POST':
-        codigo = request.form.get('codigo')
-        usuario = Usuario.query.filter_by(id=session.get('user_id')).first()
-        
-        if usuario and usuario.codigo_verificacion == codigo:
-            usuario.verificado = True
-            usuario.codigo_verificacion = None
-            db.session.commit()
-            flash('Email verificado correctamente', 'success')
-            return redirect(url_for('dashboard'))
-        else:
-            flash('Codigo incorrecto', 'error')
-    
-    return render_template('verificar.html')
 
 @app.route('/nueva-password', methods=['GET', 'POST'])
 def nueva_password():
@@ -369,7 +352,7 @@ def crear_empresa():
     
     return render_template('crear_empresa.html', usuario=usuario)
 
-@app.route('/logout')
+@app.route('/logout', methods=['POST'])
 @login_required
 def logout():
     logout_user()
@@ -387,8 +370,10 @@ def dashboard():
     
     config = current_user.empresa
     
-    total_gastos = sum(g.monto for g in gastos)
-    total_ingresos = sum(i.monto for i in ingresos)
+    # eva_utils opera con floats (tasa_impuestos/capital_invertido son Float),
+    # asi que convertimos los totales Decimal en el borde para no mezclar tipos.
+    total_gastos = float(sum(g.monto for g in gastos))
+    total_ingresos = float(sum(i.monto for i in ingresos))
     
     analisis = generar_analisis_completo(total_ingresos, total_gastos, config)
     gastos_cat = gastos_por_categoria(gastos)
@@ -427,8 +412,8 @@ def nuevo_gasto():
                 return redirect(url_for('nuevo_gasto'))
             
             try:
-                monto = float(monto_str)
-            except ValueError:
+                monto = Decimal(monto_str)
+            except InvalidOperation:
                 flash('El monto debe ser un número válido', 'danger')
                 return redirect(url_for('nuevo_gasto'))
             
@@ -481,7 +466,7 @@ def editar_gasto(id):
     if request.method == 'POST':
         try:
             descripcion = request.form.get('descripcion', '').strip()
-            monto = float(request.form.get('monto', 0))
+            monto = Decimal(request.form.get('monto') or 0)
             
             if not descripcion or monto <= 0:
                 flash('Complete todos los campos correctamente', 'danger')
@@ -555,7 +540,7 @@ def nuevo_ingreso():
     if request.method == 'POST':
         try:
             descripcion = request.form.get('descripcion', '').strip()
-            monto = float(request.form.get('monto', 0))
+            monto = Decimal(request.form.get('monto') or 0)
             
             if not descripcion or monto <= 0:
                 flash('Complete todos los campos correctamente', 'danger')
@@ -602,17 +587,15 @@ def editar_ingreso(id):
     if request.method == 'POST':
         try:
             descripcion = request.form.get('descripcion', '').strip()
-            monto = float(request.form.get('monto', 0))
-            recibido_de = request.form.get('recibido_de', '').strip()
+            monto = Decimal(request.form.get('monto') or 0)
             
-            if not descripcion or monto <= 0 or not recibido_de:
+            if not descripcion or monto <= 0:
                 flash('Complete todos los campos correctamente', 'danger')
                 return redirect(url_for('editar_ingreso', id=id))
             
             ingreso.descripcion = descripcion
             ingreso.monto = monto
             ingreso.categoria_id = int(request.form['categoria_id'])
-            ingreso.recibido_de = recibido_de
             ingreso.fecha = datetime.strptime(request.form['fecha'], '%Y-%m-%d').date()
             
             db.session.commit()
@@ -704,7 +687,7 @@ def ver_historial():
     historial = Historial.query.filter_by(usuario_id=current_user.id).order_by(Historial.fecha.desc()).all()
     return render_template('historial.html', historial=historial, usuario=current_user)
 
-@app.route('/historial/limpiar', methods=['GET'])
+@app.route('/historial/limpiar', methods=['POST'])
 @login_required
 def limpiar_historial():
     # Limpiar solo el historial del usuario
@@ -947,7 +930,7 @@ def exportar_ingresos():
                    top=Side(style='thin'), bottom=Side(style='thin'))
     
     # Headers
-    headers = ['Fecha', 'Descripción', 'Categoría', 'Monto', 'Recibido De']
+    headers = ['Fecha', 'Descripción', 'Categoría', 'Monto']
     for col, header in enumerate(headers, 1):
         cell = ws.cell(row=1, column=col)
         cell.value = header
@@ -962,9 +945,8 @@ def exportar_ingresos():
         ws.cell(row=row, column=2).value = ingreso.descripcion
         ws.cell(row=row, column=3).value = ingreso.categoria.nombre
         ws.cell(row=row, column=4).value = float(ingreso.monto)
-        ws.cell(row=row, column=5).value = ingreso.recibido_de
         
-        for col in range(1, 6):
+        for col in range(1, 5):
             ws.cell(row=row, column=col).border = border
             if col == 4:
                 ws.cell(row=row, column=col).number_format = '$#,##0.00'
@@ -974,7 +956,6 @@ def exportar_ingresos():
     ws.column_dimensions['B'].width = 30
     ws.column_dimensions['C'].width = 20
     ws.column_dimensions['D'].width = 12
-    ws.column_dimensions['E'].width = 20
     
     # Total
     total_row = len(ingresos) + 2
@@ -1065,4 +1046,6 @@ if __name__ == '__main__':
     print(f"✓ MAIL_PASSWORD: {'*' * 20}")
     print(f"✓ MAIL_SERVER: {app.config['MAIL_SERVER']}")
     print("="*50 + "\n")
-    app.run(debug=False)  # CAMBIAR A FALSE PARA EVITAR RECARGAS
+    print("Iniciando servidor...")
+    print("Abre: http://localhost:5000")
+    app.run(debug=True, host='127.0.0.1', port=5000)

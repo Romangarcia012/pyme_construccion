@@ -143,7 +143,9 @@
             <h1>Historial de Cambios</h1>
             <div class="menu">
                 <a href="{{ url_for('dashboard') }}">← Volver</a>
-                <button type="button" class="btn-limpiar-historial" onclick="if(confirm('¿Estás seguro? Se eliminarán todos los registros del historial.')) window.location.href='/historial/limpiar'">Limpiar Historial</button>
+                <form method="POST" action="{{ url_for('limpiar_historial') }}" style="display: inline;">
+                    <button type="submit" class="btn-limpiar-historial" onclick="return confirm('¿Estás seguro? Se eliminarán todos los registros del historial.')">Limpiar Historial</button>
+                </form>
             </div>
         </header>
         

@@ -313,7 +313,6 @@
                             <th>Descripción</th>
                             <th>Monto</th>
                             <th>Categoría</th>
-                            <th>Recibido de</th>
                             <th>Acciones</th>
                         </tr>
                     </thead>
@@ -326,7 +325,6 @@
                                 <td>{{ ingreso.descripcion }}</td>
                                 <td><strong style="color: green;">${{ "%.2f"|format(ingreso.monto) }}</strong></td>
                                 <td>{{ ingreso.categoria.nombre }}</td>
-                                <td>{{ ingreso.recibido_de }}</td>
                                 <td>
                                     <div class="acciones">
                                         <a href="{{ url_for('editar_ingreso', id=ingreso.id) }}" class="btn-editar">Editar</a>
