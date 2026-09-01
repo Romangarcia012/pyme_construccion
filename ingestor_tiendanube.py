@@ -9,7 +9,7 @@ hace falta para el backfill manual:
     traer_pedidos()            pedidos crudos, paginados
     normalizar()               producto | pedido | item -> dict del modelo
 
-`traer_pagos()` queda vacio a proposito: los pagos son FASE3-S3.
+`traer_pagos()` queda vacio a proposito: los pagos son de una slice posterior.
 
 Este modulo NO toca la base ni decide que insertar: eso es `sync_tiendanube.py`.
 normalizar() es puro (ni red ni base), asi que se testea con payloads guardados
@@ -93,6 +93,33 @@ def a_entero(valor, por_defecto=0):
         return por_defecto
 
 
+def a_stock(variante):
+    """Stock de una variante -> int, o None si el dato no existe.
+
+    None y 0 NO son lo mismo y esta funcion existe para no confundirlos.
+    Tiendanube manda dos campos por variante: `stock_management` (bool, si el
+    producto lleva control de stock) y `stock` (int). Con el control apagado
+    el stock no es un dato de la tienda y la API manda null; escribir 0 ahi
+    seria afirmar "no queda ninguno", que es justo lo contrario de "nadie
+    lleva la cuenta". Por eso este caso devuelve None y no cae en el default
+    de a_entero(), que es 0.
+
+    Un stock de verdad en cero (control prendido, ultima unidad vendida) si
+    entra como 0: ese es un dato, y ademas el que deberia frenar una venta.
+    """
+    if variante.get('stock_management') is False:
+        return None
+    valor = variante.get('stock')
+    # isinstance(True, int) es True en Python: un bool colado en el campo no
+    # puede terminar guardado como 1 unidad.
+    if valor is None or valor == '' or isinstance(valor, bool):
+        return None
+    try:
+        return int(str(valor).strip())
+    except (TypeError, ValueError):
+        return None
+
+
 def a_fecha_utc(valor):
     """ISO 8601 de la API -> datetime naive en UTC.
 
@@ -169,7 +196,7 @@ class IngestorTiendanube(IngestorCanal):
             raise self._como_error_ingesta(exc, ENTIDAD_PEDIDO) from exc
 
     def traer_pagos(self, desde=None, hasta=None):
-        """Vacio: los pagos (y Tiendanube Pagos) son FASE3-S3.
+        """Vacio: los pagos (y Tiendanube Pagos) son de una slice posterior.
 
         Se implementa igual porque el contrato la declara abstracta y sin
         cuerpo la clase no se puede instanciar.
@@ -224,7 +251,9 @@ class IngestorTiendanube(IngestorCanal):
             # el panel. costo_unitario queda NULL y lo carga Roman a mano; el
             # sync no lo pisa nunca, ni al crear ni al actualizar.
             'costo_unitario': None,
-            'stock': variante.get('stock') if isinstance(variante.get('stock'), int) else None,
+            # El stock si viene del canal y si se refresca en cada corrida
+            # (ver a_stock: null del canal -> NULL en la base, nunca 0).
+            'stock': a_stock(variante),
             'activo': bool(producto.get('published', True)),
             'id_producto_externo': _cortar(id_producto, LARGO_ID_EXTERNO),
             'id_variante_externo': _cortar(id_variante, LARGO_ID_EXTERNO) or '',

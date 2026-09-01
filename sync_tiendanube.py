@@ -338,9 +338,17 @@ def _sincronizar_productos(canal, ingestor, fila_log):
 def _upsert_producto_y_mapeo(canal, datos):
     """Un SKU del canal -> una fila de producto y una de mapeo.
 
-    Lo que NO se toca al actualizar: `costo_unitario`. Tiendanube no lo sabe y
-    Roman lo carga a mano; pisarlo con NULL en cada sync borraria el unico dato
-    de costo que existe y dejaria todos los margenes en cero.
+    Dos reglas opuestas a proposito, segun de quien sea el dato:
+
+    `costo_unitario` NO se toca nunca. Tiendanube no lo sabe y Roman lo carga a
+    mano; pisarlo con NULL en cada sync borraria el unico dato de costo que
+    existe y dejaria todos los margenes en cero.
+
+    `stock` SI se pisa en cada corrida, igual que nombre y activo, y con NULL
+    incluido: la fuente de verdad del stock es la tienda, no la base. Un
+    producto al que le apagaron el control de stock tiene que volver a NULL
+    ("no se lleva la cuenta"), no quedarse con el ultimo numero que se vio ni
+    caer a 0 ("no queda ninguno"), que son tres cosas distintas.
     """
     producto = Producto.query.filter_by(
         empresa_id=canal.empresa_id, sku=datos['sku']).first()
@@ -359,11 +367,12 @@ def _upsert_producto_y_mapeo(canal, datos):
         producto.nombre = datos['nombre']
         producto.activo = datos['activo']
 
-    # Precio y stock si son datos del canal: se refrescan siempre.
     if datos.get('precio_lista') is not None:
         producto.precio_lista = datos['precio_lista']
-    if datos.get('stock') is not None:
-        producto.stock = datos['stock']
+
+    # Sin guardia de None, a diferencia del precio: aca el NULL tambien es un
+    # valor que hay que escribir (ver el docstring).
+    producto.stock = datos.get('stock')
 
     db.session.flush()
 
