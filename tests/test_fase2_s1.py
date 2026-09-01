@@ -247,14 +247,56 @@ class TestLaMigracionNoTocoDatosExistentes(unittest.TestCase):
             actual = conn.execute(text('select version_num from alembic_version')).scalar()
         self.assertEqual(actual, '4a3c449fc7b6')
 
-    def test_los_dos_canales_semilla_existen_y_estan_inactivos(self):
-        from models import db
+    def test_los_dos_canales_semilla_existen_con_el_estado_de_su_conexion(self):
+        """Los dos canales que sembro la migracion, y como quedo cada uno.
+
+        Este test nacio en FASE2-S1 afirmando que los DOS estaban inactivos,
+        que era cierto cuando la migracion solo sembraba filas vacias.
+        FASE3-S1 conecto Tiendanube de verdad contra la tienda de Roman, asi
+        que esa afirmacion dejo de valer: un canal conectado TIENE que estar
+        activo. Lo que sigue verificandose es el estado real esperado de cada
+        uno, no un "no falla":
+
+            mercadolibre  -> sembrado y sin conectar (no hay flujo OAuth aun)
+            tiendanube    -> conectado, con el store id que devolvio la API
+        """
+        from models import CredencialCanal, db
         with app.app_context():
             canales = db.session.query(CanalVenta).order_by(CanalVenta.tipo).all()
-        tipos = sorted({c.tipo for c in canales})
-        self.assertEqual(tipos, ['mercadolibre', 'tiendanube'])
-        for c in canales:
-            self.assertFalse(c.activo, 'el canal %s no deberia estar activo sin credenciales' % c.tipo)
+            por_tipo = {c.tipo: c for c in canales}
+
+            self.assertEqual(sorted(por_tipo), ['mercadolibre', 'tiendanube'])
+
+            # Mercado Libre no tiene flujo de conexion implementado todavia:
+            # si algun dia aparece activo, alguien lo prendio a mano.
+            ml = por_tipo['mercadolibre']
+            self.assertFalse(ml.activo, 'mercadolibre no tiene OAuth: no puede estar conectado')
+            self.assertIsNone(ml.id_tienda_externo)
+
+            # Tiendanube si se conecto (FASE3-S1). Un canal activo sin store id
+            # seria un canal a medio conectar: no se podria ni pedirle pedidos,
+            # porque el id va en la URL de cada request.
+            tienda = por_tipo['tiendanube']
+            self.assertTrue(tienda.activo, 'tiendanube quedo conectado en FASE3-S1')
+            self.assertTrue((tienda.id_tienda_externo or '').strip(),
+                            'un canal activo sin id_tienda_externo esta a medio conectar')
+
+            # La regla que sobrevivio del test original: no hay canal activo
+            # sin credencial detras. Es la que de verdad importa -- un canal
+            # prendido sin token rompe el sync en silencio.
+            for canal in canales:
+                credencial = (db.session.query(CredencialCanal)
+                              .filter_by(canal_id=canal.id, activo=True)
+                              .first())
+                if canal.activo:
+                    self.assertIsNotNone(
+                        credencial, 'el canal %s esta activo sin credencial' % canal.tipo)
+                    self.assertTrue(credencial.access_token_cifrado,
+                                    'el canal %s no tiene token guardado' % canal.tipo)
+                else:
+                    self.assertIsNone(
+                        credencial, 'el canal %s esta apagado pero tiene credencial viva'
+                        % canal.tipo)
 
 
 class TestRutasViejasSiguenVivas(unittest.TestCase):
