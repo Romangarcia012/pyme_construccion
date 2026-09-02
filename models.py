@@ -292,14 +292,9 @@ class CuentaCobro(db.Model):
     nombre = db.Column(db.String(100), nullable=False)
     tipo = db.Column(db.String(30), nullable=False)  # 'mercadopago' | 'tiendanube_pagos'
     metodo_ingesta = db.Column(db.String(20), nullable=False, default='api', server_default='api')
-    identificador_externo = db.Column(db.String(100))
-    # FASE-MP-S1: el user_id que devuelve el OAuth de Mercado Pago, o sea el id
-    # de la cuenta del lado del procesador. Se llama asi por simetria con
+    # El user_id que devuelve el OAuth de Mercado Pago, o sea el id de la
+    # cuenta del lado del procesador. Se llama asi por simetria con
     # canal_venta.id_tienda_externo: "el id de esta cosa alla afuera".
-    #
-    # No reusa `identificador_externo`, que quedo de FASE2-S1 sin uso ni
-    # semantica definida en ningun lado; unificar las dos columnas es una
-    # limpieza aparte y no puede colgarse de la slice que conecta las cuentas.
     id_cuenta_externa = db.Column(db.String(100))
     moneda = db.Column(db.String(3), nullable=False, default='ARS')
     saldo_actual = db.Column(db.Numeric(14, 2), nullable=False, default=0)
