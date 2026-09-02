@@ -10,7 +10,6 @@ Se usa unittest (stdlib) a proposito: la slice no puede agregar dependencias
 nuevas a requirements.txt y pytest no esta instalado.
 """
 
-import json
 import os
 import sys
 import unittest
@@ -34,10 +33,26 @@ from models import (
     Producto,
 )
 
-RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-BASELINE = os.path.join(RAIZ, 'tests', 'baseline_pre_fase2_s1.json')
-
 TABLAS_VIEJAS = ['empresa', 'usuario', 'categoria', 'historial', 'gasto', 'ingreso']
+
+# Todas las claves foraneas que salen de las 6 tablas originales:
+# (tabla, columna, tabla a la que apunta). `empresa` no tiene ninguna, es la
+# raiz del arbol. `gasto.cuenta_pago_id` apunta a una tabla de FASE2-S1, pero
+# la columna vive en una tabla vieja y ya dio problemas una vez (el select de
+# cuenta huerfana que arreglo el commit 399f5ef), asi que entra igual.
+#
+# Los nombres de esta lista se interpolan en el SQL de mas abajo. Son
+# constantes de este modulo, no entra nada de afuera.
+FKS_TABLAS_VIEJAS = [
+    ('usuario',   'empresa_id',     'empresa'),
+    ('categoria', 'usuario_id',     'usuario'),
+    ('gasto',     'usuario_id',     'usuario'),
+    ('gasto',     'categoria_id',   'categoria'),
+    ('gasto',     'cuenta_pago_id', 'cuenta_cobro'),
+    ('ingreso',   'usuario_id',     'usuario'),
+    ('ingreso',   'categoria_id',   'categoria'),
+    ('historial', 'usuario_id',     'usuario'),
+]
 
 
 class BaseTransaccional(unittest.TestCase):
@@ -208,37 +223,46 @@ class TestDedupDeMovimientos(BaseTransaccional):
 class TestLaMigracionNoTocoDatosExistentes(unittest.TestCase):
     """La promesa "esta slice es puramente aditiva", verificada.
 
-    El baseline de tests/baseline_pre_fase2_s1.json se capturo en vivo
-    contra Supabase justo antes de correr `flask db upgrade`. Si la
-    migracion hubiera borrado, insertado o duplicado una sola fila de las 6
-    tablas originales, este test lo marca.
+    Ojo con el nombre: el test que comparaba los conteos de filas contra un
+    baseline congelado ya no esta (ver el comentario de abajo). Lo que queda
+    en esta clase es el estado que la migracion dejo y que si es estable:
+    la revision aplicada y los dos canales que sembro.
     """
+
+    # ------------------------------------------------------------------
+    # RETIRADO: test_las_6_tablas_originales_tienen_las_mismas_filas_que_antes
+    #
+    # Que probaba: que aplicar la migracion 4a3c449fc7b6 (FASE2-S1, agosto/
+    # septiembre de 2026) no borro, inserto ni duplico una sola fila de las 6
+    # tablas que ya existian -- empresa, usuario, categoria, historial, gasto,
+    # ingreso. Comparaba el conteo exacto de cada una contra
+    # tests/baseline_pre_fase2_s1.json, capturado en vivo contra Supabase
+    # inmediatamente antes de correr `flask db upgrade`.
+    #
+    # Cumplio su funcion: la slice se verifico aditiva en su momento y eso
+    # quedo asentado en los commits de FASE2-S1 y en el JSON del baseline, que
+    # se conserva como registro historico.
+    #
+    # Por que se retira: era una verificacion de un evento puntual disfrazada
+    # de chequeo de regresion permanente. Los conteos son de la base VIVA, y
+    # esas tablas crecen con el uso normal de la app -- historial suma una fila
+    # por cada accion de Roman, y gasto/ingreso van a crecer apenas cargue
+    # datos de verdad. Empezo a fallar en rojo sin que hubiera ninguna
+    # regresion: la app simplemente se uso. Un test que se pone rojo por el uso
+    # esperado del sistema no informa nada y entrena a ignorar la suite.
+    #
+    # Lo reemplaza TestIntegridadReferencial, mas abajo: invariantes que tienen
+    # que valer sobre la base viva sin importar cuanto crezca.
+    # ------------------------------------------------------------------
 
     @classmethod
     def setUpClass(cls):
         cls.ctx = app.app_context()
         cls.ctx.push()
-        with open(BASELINE, encoding='utf-8') as fh:
-            cls.baseline = json.load(fh)
 
     @classmethod
     def tearDownClass(cls):
         cls.ctx.pop()
-
-    def _contar(self, tabla):
-        from sqlalchemy import text
-        from models import db
-        with db.engine.connect() as conn:
-            return conn.execute(text('select count(*) from "%s"' % tabla)).scalar()
-
-    def test_las_6_tablas_originales_tienen_las_mismas_filas_que_antes(self):
-        esperado = self.baseline['conteos']
-        for tabla in TABLAS_VIEJAS:
-            with self.subTest(tabla=tabla):
-                self.assertEqual(
-                    self._contar(tabla), esperado[tabla],
-                    'la tabla %s cambio de cantidad de filas al migrar' % tabla,
-                )
 
     def test_la_migracion_de_esta_slice_esta_aplicada(self):
         from sqlalchemy import text
@@ -297,6 +321,131 @@ class TestLaMigracionNoTocoDatosExistentes(unittest.TestCase):
                     self.assertIsNone(
                         credencial, 'el canal %s esta apagado pero tiene credencial viva'
                         % canal.tipo)
+
+
+class TestIntegridadReferencial(unittest.TestCase):
+    """Invariantes que valen sobre la base viva, crezca lo que crezca.
+
+    Reemplaza al test de conteos que estaba antes en este archivo. La
+    diferencia esta en la forma de la afirmacion: aquel decia "la tabla X tiene
+    N filas", que deja de ser cierto en cuanto alguien usa la app; estos dicen
+    "ninguna fila apunta a algo que no existe", que tiene que seguir siendo
+    cierto con 0 filas, con 2 y con 200.000. Solo leen: no escriben nada.
+
+    Las dos primeras familias de chequeos se apoyan una en la otra. Postgres
+    hoy tiene declaradas todas las FK, asi que buscar huerfanos deberia dar
+    cero por construccion -- pero eso vale mientras las FK sigan ahi, y una
+    migracion que recree una tabla puede perderlas sin avisar. Por eso se
+    verifica tambien que las restricciones sigan declaradas: un chequeo cuida
+    al otro.
+
+    Las dos ultimas familias son las que Postgres NO puede cuidar solo, y por
+    eso son las que mas valen:
+
+        un gasto usa una categoria de OTRO usuario   -> fuga entre usuarios
+        un gasto usa una categoria de tipo 'ingreso' -> categoria mal asignada
+
+    Las dos son imposibles por la via normal: los formularios de gasto e
+    ingreso filtran las categorias por usuario_id y por tipo (app.py). Si
+    alguna aparece, entro por un camino que no es la app.
+
+    Nota honesta: con gasto, ingreso y categoria todavia en cero, esos dos
+    ultimos chequeos pasan sin recorrer ninguna fila. Empiezan a tener dientes
+    cuando Roman cargue datos, que es justo cuando hacen falta.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.ctx = app.app_context()
+        cls.ctx.push()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.ctx.pop()
+
+    def _filas(self, sql):
+        from sqlalchemy import text
+        from models import db
+        with db.engine.connect() as conn:
+            return conn.execute(text(sql)).fetchall()
+
+    def test_ninguna_fila_apunta_a_un_padre_que_no_existe(self):
+        """El huerfano clasico: un gasto de un usuario borrado, un historial
+        que referencia a alguien que ya no esta."""
+        for tabla, columna, referida in FKS_TABLAS_VIEJAS:
+            with self.subTest(fk='%s.%s -> %s' % (tabla, columna, referida)):
+                huerfanos = self._filas(
+                    'select h.id from "%s" h '
+                    'left join "%s" p on h."%s" = p.id '
+                    'where h."%s" is not null and p.id is null '
+                    'limit 10' % (tabla, referida, columna, columna))
+                self.assertEqual(
+                    [f.id for f in huerfanos], [],
+                    'hay filas de %s cuyo %s no existe en %s (se muestran hasta 10)'
+                    % (tabla, columna, referida))
+
+    def test_las_fk_de_las_tablas_viejas_siguen_declaradas(self):
+        """Que las FK existan es lo que hace barato al test de arriba.
+
+        Si una migracion futura recrea una de estas tablas y se olvida la
+        restriccion, los huerfanos pasan a ser posibles y nadie se entera hasta
+        que algo se rompe en pantalla.
+        """
+        from sqlalchemy import inspect
+        from models import db
+
+        inspector = inspect(db.engine)
+        for tabla, columna, referida in FKS_TABLAS_VIEJAS:
+            with self.subTest(fk='%s.%s -> %s' % (tabla, columna, referida)):
+                declaradas = [
+                    (tuple(fk['constrained_columns']), fk['referred_table'])
+                    for fk in inspector.get_foreign_keys(tabla)
+                ]
+                self.assertIn(
+                    ((columna,), referida), declaradas,
+                    'la base perdio la FK %s.%s -> %s' % (tabla, columna, referida))
+
+    def test_las_6_tablas_originales_siguen_existiendo(self):
+        """Lo unico del baseline viejo que si es permanente: que esten."""
+        from sqlalchemy import inspect
+        from models import db
+
+        presentes = set(inspect(db.engine).get_table_names())
+        for tabla in TABLAS_VIEJAS:
+            with self.subTest(tabla=tabla):
+                self.assertIn(tabla, presentes)
+
+    def test_nadie_usa_una_categoria_de_otro_usuario(self):
+        """Fuga entre usuarios. Postgres no la puede ver: la FK a categoria se
+        cumple igual, aunque la categoria sea de otro."""
+        for tabla in ('gasto', 'ingreso'):
+            with self.subTest(tabla=tabla):
+                cruzados = self._filas(
+                    'select x.id from "%s" x '
+                    'join categoria c on x.categoria_id = c.id '
+                    'where c.usuario_id <> x.usuario_id '
+                    'limit 10' % tabla)
+                self.assertEqual(
+                    [f.id for f in cruzados], [],
+                    'hay filas de %s que usan una categoria de otro usuario' % tabla)
+
+    def test_la_categoria_de_un_gasto_es_de_tipo_gasto(self):
+        """Y la de un ingreso, de tipo ingreso.
+
+        El nombre de la tabla y el valor de categoria.tipo son el mismo string
+        ('gasto' / 'ingreso'), asi que la comparacion se arma sola.
+        """
+        for tabla in ('gasto', 'ingreso'):
+            with self.subTest(tabla=tabla):
+                mal_tipadas = self._filas(
+                    "select x.id from \"%s\" x "
+                    "join categoria c on x.categoria_id = c.id "
+                    "where c.tipo <> '%s' "
+                    "limit 10" % (tabla, tabla))
+                self.assertEqual(
+                    [f.id for f in mal_tipadas], [],
+                    'hay filas de %s con una categoria que no es de tipo %s'
+                    % (tabla, tabla))
 
 
 class TestRutasViejasSiguenVivas(unittest.TestCase):
