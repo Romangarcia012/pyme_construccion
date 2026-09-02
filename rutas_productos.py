@@ -211,6 +211,21 @@ def _sumar_stock(acumulado, stock):
     return stock if acumulado is None else acumulado + stock
 
 
+def _stock_inicial(stock, vendido):
+    """Con cuanto se arranco: lo que queda mas lo que salio.
+
+    Es la columna con la que empieza la planilla. No esta guardada en ningun
+    lado -- nadie anoto el stock del dia cero -- pero se reconstruye sola: si
+    quedan 93 y se vendieron 5, habia 98.
+
+    Sin control de stock no hay de donde partir: el vendido solo no dice
+    cuanto habia, asi que la fila queda sin control tambien.
+    """
+    if stock is None:
+        return None
+    return stock + vendido
+
+
 @productos_bp.route('/resumen')
 @login_required
 def resumen_ventas():
@@ -258,18 +273,21 @@ def resumen_ventas():
         filas = []
         total_por_canal = [0] * len(ids_canal)
         total_stock = None
+        total_stock_inicial = None
         total_vendido = 0
 
         for producto, etiqueta in grupo['variantes']:
             por_canal = [vendido.get((producto.id, canal_id), 0)
                          for canal_id in ids_canal]
             vendido_fila = sum(por_canal)
+            stock_inicial = _stock_inicial(producto.stock, vendido_fila)
 
             filas.append({
                 'sku': producto.sku,
                 # Sin etiqueta de variante (un producto sin colores) la fila se
                 # nombra con el nombre completo: nunca queda en blanco.
                 'variante': etiqueta if (compartido and etiqueta) else producto.nombre,
+                'stock_inicial': stock_inicial,
                 'stock': producto.stock,
                 'por_canal': por_canal,
                 'vendido': vendido_fila,
@@ -279,12 +297,17 @@ def resumen_ventas():
             total_por_canal = [acum + unidades for acum, unidades
                                in zip(total_por_canal, por_canal)]
             total_stock = _sumar_stock(total_stock, producto.stock)
+            # El TOTAL suma las filas que se ven, no rehace la cuenta sobre los
+            # totales: si una variante queda sin control de stock, sale de las
+            # dos cuentas a la vez y la columna sigue cerrando con lo de arriba.
+            total_stock_inicial = _sumar_stock(total_stock_inicial, stock_inicial)
             total_vendido += vendido_fila
 
         salida.append({
             'nombre': nombre_grupo,
             'filas': filas,
             'total': {
+                'stock_inicial': total_stock_inicial,
                 'stock': total_stock,
                 'por_canal': total_por_canal,
                 'vendido': total_vendido,

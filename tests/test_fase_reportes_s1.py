@@ -284,6 +284,33 @@ class TestAgrupadoYTotales(BaseReporte):
         self.assertEqual(filas['Gris']['stock'], 93)
         self.assertEqual(grupo['total']['stock'], 263)
 
+    def test_stock_inicial_es_suma_actual_mas_vendido(self):
+        # La columna con la que arranca la planilla: no esta guardada, se
+        # reconstruye fila por fila con lo que queda mas lo que salio.
+        grupo = self.grupo_llamado(self.contexto, 'Tarjetero Minimalista de Aluminio')
+        filas = {fila['variante']: fila for fila in grupo['filas']}
+        self.assertEqual(filas['Gris']['stock_inicial'], 93 + 5)
+        self.assertEqual(filas['Negro']['stock_inicial'], 170 + 15)
+
+        for grupo in self.contexto['grupos']:
+            for fila in grupo['filas']:
+                self.assertEqual(fila['stock_inicial'],
+                                 fila['stock'] + fila['vendido'],
+                                 'la fila %r no cierra' % fila['variante'])
+
+    def test_stock_inicial_total_suma_filas_variante(self):
+        # El TOTAL suma lo que se ve arriba. Si en cambio se recalculara como
+        # total_stock + total_vendido, el dia que una fila quede afuera de una
+        # de las dos cuentas la columna dejaria de cerrar en silencio.
+        for grupo in self.contexto['grupos']:
+            self.assertEqual(grupo['total']['stock_inicial'],
+                             sum(fila['stock_inicial'] for fila in grupo['filas']),
+                             'el TOTAL de %r no cierra' % grupo['nombre'])
+
+        grupo = self.grupo_llamado(self.contexto, 'Tarjetero Minimalista de Aluminio')
+        # 263 de stock + 20 vendidas: las 283 con las que se arranco.
+        self.assertEqual(grupo['total']['stock_inicial'], 283)
+
     def test_el_reporte_no_toca_el_stock(self):
         # Es de solo lectura: mirarlo no puede mover un numero.
         self.assertEqual(db.session.get(Producto, self.negro.id).stock, 170)

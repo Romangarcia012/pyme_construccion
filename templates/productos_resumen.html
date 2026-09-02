@@ -134,6 +134,7 @@
                         <thead>
                             <tr>
                                 <th>Variante</th>
+                                <th class="num">Stock inicial</th>
                                 <th class="num">Stock actual</th>
                                 {% for columna in columnas %}
                                     <th class="num {% if loop.first %}corte{% endif %}">{{ columna }}</th>
@@ -150,6 +151,13 @@
                                     <br><span class="sku">{{ fila.sku }}</span>
                                 </td>
                                 <td class="num">
+                                    {% if fila.stock_inicial is none %}
+                                        <span class="sin-control">sin control</span>
+                                    {% else %}
+                                        {{ fila.stock_inicial }}
+                                    {% endif %}
+                                </td>
+                                <td class="num">
                                     {% if fila.stock is none %}
                                         <span class="sin-control">sin control</span>
                                     {% else %}
@@ -164,6 +172,13 @@
                             {% endfor %}
                             <tr class="total">
                                 <td>TOTAL</td>
+                                <td class="num">
+                                    {% if grupo.total.stock_inicial is none %}
+                                        <span class="sin-control">sin control</span>
+                                    {% else %}
+                                        {{ grupo.total.stock_inicial }}
+                                    {% endif %}
+                                </td>
                                 <td class="num">
                                     {% if grupo.total.stock is none %}
                                         <span class="sin-control">sin control</span>
@@ -224,7 +239,6 @@
         <p class="aclaracion">
             El stock lo mantiene Tiendanube y lo descuentan las ventas de mostrador.
             Lo vendido sale de los pedidos registrados, sin contar los cancelados.
-            El «stock inicial» de la planilla es la suma de las dos columnas.
         </p>
     </div>
 </body>
