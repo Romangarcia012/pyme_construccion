@@ -137,10 +137,16 @@ class CanalVenta(db.Model):
     nombre = db.Column(db.String(100), nullable=False)
     id_tienda_externo = db.Column(db.String(100))
     activo = db.Column(db.Boolean, nullable=False, default=False)
+    # FASE-MP-S1: a que cuenta entra la plata de este canal. Nullable porque el
+    # canal existe desde antes que la cuenta y porque un canal puede liquidar a
+    # una cuenta que todavia no se conecto. No es lo mismo que la cuenta del
+    # pago: esto es la regla general del canal, el pago dira lo que paso.
+    cuenta_cobro_id = db.Column(db.Integer, db.ForeignKey('cuenta_cobro.id'), index=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     fecha_ultima_sync = db.Column(db.DateTime)
 
     empresa = db.relationship('Empresa', backref='canales_venta')
+    cuenta_cobro = db.relationship('CuentaCobro', backref='canales_venta')
 
     __table_args__ = (
         db.UniqueConstraint('empresa_id', 'tipo', name='uq_canal_venta_empresa_tipo'),
@@ -287,6 +293,14 @@ class CuentaCobro(db.Model):
     tipo = db.Column(db.String(30), nullable=False)  # 'mercadopago' | 'tiendanube_pagos'
     metodo_ingesta = db.Column(db.String(20), nullable=False, default='api', server_default='api')
     identificador_externo = db.Column(db.String(100))
+    # FASE-MP-S1: el user_id que devuelve el OAuth de Mercado Pago, o sea el id
+    # de la cuenta del lado del procesador. Se llama asi por simetria con
+    # canal_venta.id_tienda_externo: "el id de esta cosa alla afuera".
+    #
+    # No reusa `identificador_externo`, que quedo de FASE2-S1 sin uso ni
+    # semantica definida en ningun lado; unificar las dos columnas es una
+    # limpieza aparte y no puede colgarse de la slice que conecta las cuentas.
+    id_cuenta_externa = db.Column(db.String(100))
     moneda = db.Column(db.String(3), nullable=False, default='ARS')
     saldo_actual = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     activo = db.Column(db.Boolean, nullable=False, default=True)
@@ -298,6 +312,46 @@ class CuentaCobro(db.Model):
     __table_args__ = (
         db.UniqueConstraint('empresa_id', 'nombre', name='uq_cuenta_cobro_empresa_nombre'),
         db.CheckConstraint("metodo_ingesta = 'api'", name='ck_cuenta_cobro_metodo_ingesta_api'),
+    )
+
+
+class CredencialCuentaCobro(db.Model):
+    """Credenciales OAuth de una cuenta de cobro (FASE-MP-S1).
+
+    Es la hermana de CredencialCanal, pero colgada de cuenta_cobro en vez de
+    canal_venta: quien cobra no es necesariamente quien vende. La cuenta de
+    Mercado Pago de Nachi recibe las ventas de Mercado Libre, y la de Roman
+    recibe las presenciales y las liquidaciones de Tiendanube; son dos
+    autorizaciones OAuth distintas, de dos personas distintas, sobre la misma
+    aplicacion de Mercado Pago.
+
+    Diferencia con Tiendanube, y el motivo de que aca si haya refresh_token y
+    expira_en: el token de Mercado Pago vence (180 dias documentados). El
+    refresco automatico NO esta implementado todavia; expira_en existe para
+    poder avisar "reconecta esta cuenta" antes de fallar contra la API.
+
+    Los dos tokens van cifrados con Fernet, misma CREDENTIALS_ENCRYPTION_KEY
+    que credencial_canal (ver cripto.py). El refresh_token es tan sensible como
+    el access_token -- sirve para fabricar access_tokens nuevos -- asi que se
+    cifra igual, no en texto plano.
+    """
+    __tablename__ = 'credencial_cuenta_cobro'
+    id = db.Column(db.Integer, primary_key=True)
+    cuenta_cobro_id = db.Column(db.Integer, db.ForeignKey('cuenta_cobro.id'),
+                                nullable=False, index=True)
+    access_token_cifrado = db.Column(db.Text)
+    refresh_token_cifrado = db.Column(db.Text)
+    expira_en = db.Column(db.DateTime)
+    actualizado_en = db.Column(db.DateTime, default=datetime.utcnow,
+                               onupdate=datetime.utcnow)
+
+    cuenta_cobro = db.relationship('CuentaCobro', backref='credenciales')
+
+    __table_args__ = (
+        # Una cuenta tiene UNA credencial vigente, no una pila de tokens
+        # viejos. Reconectar pisa la fila; asi no hay que decidir cual de tres
+        # tokens es el bueno.
+        db.UniqueConstraint('cuenta_cobro_id', name='uq_credencial_cuenta_cobro_cuenta'),
     )
 
 

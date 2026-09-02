@@ -199,6 +199,26 @@
         .sync-parcial { color: #ffd43b; font-weight: 600; }
         .sync-corriendo { color: #4dabf7; font-weight: 600; }
 
+        /* --- FASE-MP-S1: cuentas de cobro --- */
+        .seccion { margin-top: 40px; }
+        .seccion h2 { color: #fff; font-size: 22px; }
+
+        .estado-vencido {
+            background: rgba(255, 212, 59, 0.15);
+            color: #ffd43b;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        .total {
+            color: #fff;
+            font-size: 16px;
+            font-weight: 600;
+        }
+
         .sync-mensaje {
             color: #ffd43b;
             font-size: 12px;
@@ -219,7 +239,7 @@
         <div class="header">
             <div>
                 <h1>Integraciones</h1>
-                <p class="subtitulo">Canales de venta conectados a tu empresa</p>
+                <p class="subtitulo">Canales de venta y cuentas de cobro de tu empresa</p>
             </div>
         </div>
 
@@ -319,6 +339,124 @@
                                         </form>
                                     {% endif %}
                                 </div>
+                            </td>
+                        </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {# --- FASE-MP-S1: cuentas de cobro ---------------------------------
+           Seccion aparte y no una fila mas de la tabla de arriba: un canal de
+           venta responde "por donde entro la venta" y una cuenta de cobro
+           "adonde entro la plata". Son dos preguntas distintas, con columnas
+           distintas (una tiene productos y pedidos, la otra un saldo), y
+           mezclarlas obligaria a dejar media tabla vacia en cada fila. #}
+        <div class="header seccion">
+            <div>
+                <h2>Cuentas de cobro</h2>
+                <p class="subtitulo">Cuánta plata entró realmente, según Mercado Pago</p>
+            </div>
+        </div>
+
+        <div class="tabla-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Cuenta</th>
+                        <th>Estado</th>
+                        <th>Total ingresado</th>
+                        <th>Última sincronización</th>
+                        <th>Acciones</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cuenta in cuentas %}
+                        <tr>
+                            <td>
+                                {{ cuenta.alias }}
+                                {% if cuenta.id_cuenta_externa %}
+                                    <br><span class="cuenta">ID {{ cuenta.id_cuenta_externa }}</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if cuenta.vencida %}
+                                    <span class="estado-vencido">Acceso vencido</span>
+                                {% elif cuenta.conectada %}
+                                    <span class="estado-activo">Conectada</span>
+                                {% else %}
+                                    <span class="estado-inactivo">Sin conectar</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {# El numero que Roman quiere ver. Es la suma de
+                                   movimiento_cuenta.monto, o sea el NETO: bruto
+                                   menos la comision de Mercado Pago. #}
+                                {% if cuenta.total is not none %}
+                                    <span class="total">$ {{ '%.2f'|format(cuenta.total) }}</span>
+                                    {% if cuenta.ultimo_movimiento %}
+                                        <br><span class="sync-detalle">
+                                            último: {{ cuenta.ultimo_movimiento.strftime('%d/%m/%Y') }}
+                                        </span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="sync-nunca">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="sync-estado">
+                                {% if not cuenta.conectada %}
+                                    <span class="sync-nunca">—</span>
+                                {% elif cuenta.sync_corriendo %}
+                                    <span class="sync-corriendo">Sincronizando…</span><br>
+                                    <span class="sync-detalle">
+                                        Empezó {{ cuenta.sync.inicio.strftime('%d/%m/%Y %H:%M') }} UTC.
+                                        Actualizá la página para ver el resultado.
+                                    </span>
+                                {% elif cuenta.sync %}
+                                    {% if cuenta.sync.estado == 'ok' %}
+                                        <span class="sync-ok">Última sync OK</span>
+                                    {% elif cuenta.sync.estado == 'error' %}
+                                        <span class="sync-error">Última sync falló</span>
+                                    {% else %}
+                                        <span class="sync-parcial">Última sync con avisos</span>
+                                    {% endif %}
+                                    <br>
+                                    <span class="sync-detalle">
+                                        {{ (cuenta.sync.fin or cuenta.sync.inicio).strftime('%d/%m/%Y %H:%M') }} UTC ·
+                                        {{ cuenta.sync.leidos }} pago(s)
+                                        ({{ cuenta.sync.nuevos }} nuevo/s)
+                                    </span>
+                                    {% if cuenta.sync.mensaje_error %}
+                                        <span class="sync-mensaje">{{ cuenta.sync.mensaje_error }}</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="sync-nunca">Nunca se sincronizó</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                <div class="acciones">
+                                    <a href="{{ url_for('integraciones.conectar_mercadopago', cuenta_cobro_id=cuenta.id) }}"
+                                       class="{% if cuenta.conectada and not cuenta.vencida %}btn-reconectar{% else %}btn-conectar{% endif %}">
+                                        {% if cuenta.conectada %}Reconectar{% else %}Conectar{% endif %}
+                                    </a>
+
+                                    {% if cuenta.conectada %}
+                                        <form class="form-sync" method="post"
+                                              action="{{ url_for('integraciones.sincronizar_mercadopago', cuenta_cobro_id=cuenta.id) }}">
+                                            <button type="submit" class="btn-sync"
+                                                    {% if cuenta.sync_corriendo %}disabled
+                                                    title="Ya hay una sincronización en curso"{% endif %}>
+                                                {% if cuenta.sync_corriendo %}Sincronizando…{% else %}Sincronizar ahora{% endif %}
+                                            </button>
+                                        </form>
+                                    {% endif %}
+                                </div>
+                            </td>
+                        </tr>
+                    {% else %}
+                        <tr>
+                            <td colspan="5" class="sync-nunca">
+                                No hay cuentas de cobro configuradas para esta empresa.
                             </td>
                         </tr>
                     {% endfor %}
