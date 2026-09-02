@@ -33,6 +33,9 @@ from models import (
     Producto,
 )
 
+MIGRACIONES = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'migrations')
+
 TABLAS_VIEJAS = ['empresa', 'usuario', 'categoria', 'historial', 'gasto', 'ingreso']
 
 # Todas las claves foraneas que salen de las 6 tablas originales:
@@ -220,13 +223,15 @@ class TestDedupDeMovimientos(BaseTransaccional):
         self.assertEqual(total, 2)
 
 
-class TestLaMigracionNoTocoDatosExistentes(unittest.TestCase):
-    """La promesa "esta slice es puramente aditiva", verificada.
+class TestEstadoDeLaBaseYDeLosCanales(unittest.TestCase):
+    """Que la base este al dia y que los canales sean coherentes.
 
-    Ojo con el nombre: el test que comparaba los conteos de filas contra un
-    baseline congelado ya no esta (ver el comentario de abajo). Lo que queda
-    en esta clase es el estado que la migracion dejo y que si es estable:
-    la revision aplicada y los dos canales que sembro.
+    La clase se llamaba TestLaMigracionNoTocoDatosExistentes, por el test de
+    conteos que ya no esta (ver el comentario de abajo). Sus dos tests
+    sobrevivientes tambien congelaban estado puntual de produccion -- un hash
+    de migracion escrito a mano y la lista exacta de canales sembrados -- y
+    quedaron reescritos como invariantes: la base esta en la ultima migracion
+    del repo, sea cual sea, y ningun canal esta prendido sin credencial.
     """
 
     # ------------------------------------------------------------------
@@ -264,63 +269,84 @@ class TestLaMigracionNoTocoDatosExistentes(unittest.TestCase):
     def tearDownClass(cls):
         cls.ctx.pop()
 
-    def test_la_migracion_de_esta_slice_esta_aplicada(self):
+    def test_la_base_esta_en_la_ultima_migracion_del_repo(self):
+        """alembic_version de Supabase == la cabeza de migrations/versions/.
+
+        Antes esto comparaba contra el hash de FASE2-S1 escrito a mano, o sea
+        que congelaba "cual fue la ultima slice que corrio" y se iba a poner en
+        rojo apenas alguna agregara una migracion nueva. Lo que importa no es
+        cual es la revision sino si la base esta al dia con el repo, y eso se
+        sigue cumpliendo pase lo que pase. La cabeza la resuelve Alembic
+        leyendo migrations/versions/, asi que el test se actualiza solo.
+        """
+        from alembic.config import Config
+        from alembic.script import ScriptDirectory
         from sqlalchemy import text
         from models import db
+
+        config = Config(os.path.join(MIGRACIONES, 'alembic.ini'))
+        config.set_main_option('script_location', MIGRACIONES)
+        cabezas = ScriptDirectory.from_config(config).get_heads()
+
+        # Mas de una cabeza es un arbol de migraciones ramificado: `flask db
+        # upgrade` no sabria cual aplicar. Va aparte para que el mensaje diga
+        # eso y no "la base esta atrasada", que seria enganioso.
+        self.assertEqual(
+            len(cabezas), 1,
+            'migrations/versions tiene %d cabezas (%s): el arbol se ramifico'
+            % (len(cabezas), ', '.join(cabezas)))
+
         with db.engine.connect() as conn:
-            actual = conn.execute(text('select version_num from alembic_version')).scalar()
-        self.assertEqual(actual, '4a3c449fc7b6')
+            aplicada = conn.execute(
+                text('select version_num from alembic_version')).scalar()
 
-    def test_los_dos_canales_semilla_existen_con_el_estado_de_su_conexion(self):
-        """Los dos canales que sembro la migracion, y como quedo cada uno.
+        self.assertEqual(
+            aplicada, cabezas[0],
+            'la base esta en la revision %s y la ultima del repo es %s: falta '
+            'correr `flask db upgrade`' % (aplicada, cabezas[0]))
 
-        Este test nacio en FASE2-S1 afirmando que los DOS estaban inactivos,
-        que era cierto cuando la migracion solo sembraba filas vacias.
-        FASE3-S1 conecto Tiendanube de verdad contra la tienda de Roman, asi
-        que esa afirmacion dejo de valer: un canal conectado TIENE que estar
-        activo. Lo que sigue verificandose es el estado real esperado de cada
-        uno, no un "no falla":
+    def test_canal_activo_y_credencial_viva_van_siempre_juntos(self):
+        """Un canal prendido tiene token, y uno apagado no deja token vivo.
 
-            mercadolibre  -> sembrado y sin conectar (no hay flujo OAuth aun)
-            tiendanube    -> conectado, con el store id que devolvio la API
+        Este test venia afirmando ademas cuales eran los canales que existian
+        ('mercadolibre' y 'tiendanube', exactamente esos dos) y en que estado
+        estaba cada uno. Eso es una foto de produccion en un momento dado: se
+        rompe si Roman conecta un canal mas, o si desconecta Tiendanube un
+        rato. De hecho ya se habia tenido que reescribir una vez, cuando
+        FASE3-S1 conecto Tiendanube de verdad y el "los dos estan inactivos"
+        original dejo de valer.
+
+        Lo que queda es la regla que si vale con cualquier cantidad de canales
+        y en cualquier combinacion de estados, en los dos sentidos:
+
+            canal activo    -> tiene que haber credencial activa con token
+            canal inactivo  -> no puede quedar credencial activa
+
+        Las dos mitades importan. Un canal prendido sin token rompe el sync en
+        silencio; un canal apagado que se quedo con la credencial viva es un
+        token que sigue existiendo sin que nadie lo use, que es justo lo que
+        una desconexion tendria que haber dado de baja.
         """
         from models import CredencialCanal, db
+        # Contexto propio: garantiza sesion nueva y no arrastra nada que haya
+        # quedado en la de la clase.
         with app.app_context():
-            canales = db.session.query(CanalVenta).order_by(CanalVenta.tipo).all()
-            por_tipo = {c.tipo: c for c in canales}
+            canales = db.session.query(CanalVenta).order_by(CanalVenta.id).all()
 
-            self.assertEqual(sorted(por_tipo), ['mercadolibre', 'tiendanube'])
-
-            # Mercado Libre no tiene flujo de conexion implementado todavia:
-            # si algun dia aparece activo, alguien lo prendio a mano.
-            ml = por_tipo['mercadolibre']
-            self.assertFalse(ml.activo, 'mercadolibre no tiene OAuth: no puede estar conectado')
-            self.assertIsNone(ml.id_tienda_externo)
-
-            # Tiendanube si se conecto (FASE3-S1). Un canal activo sin store id
-            # seria un canal a medio conectar: no se podria ni pedirle pedidos,
-            # porque el id va en la URL de cada request.
-            tienda = por_tipo['tiendanube']
-            self.assertTrue(tienda.activo, 'tiendanube quedo conectado en FASE3-S1')
-            self.assertTrue((tienda.id_tienda_externo or '').strip(),
-                            'un canal activo sin id_tienda_externo esta a medio conectar')
-
-            # La regla que sobrevivio del test original: no hay canal activo
-            # sin credencial detras. Es la que de verdad importa -- un canal
-            # prendido sin token rompe el sync en silencio.
             for canal in canales:
-                credencial = (db.session.query(CredencialCanal)
-                              .filter_by(canal_id=canal.id, activo=True)
-                              .first())
-                if canal.activo:
-                    self.assertIsNotNone(
-                        credencial, 'el canal %s esta activo sin credencial' % canal.tipo)
-                    self.assertTrue(credencial.access_token_cifrado,
-                                    'el canal %s no tiene token guardado' % canal.tipo)
-                else:
-                    self.assertIsNone(
-                        credencial, 'el canal %s esta apagado pero tiene credencial viva'
-                        % canal.tipo)
+                with self.subTest(canal=canal.tipo, canal_id=canal.id):
+                    credencial = (db.session.query(CredencialCanal)
+                                  .filter_by(canal_id=canal.id, activo=True)
+                                  .first())
+                    if canal.activo:
+                        self.assertIsNotNone(
+                            credencial, 'el canal %s esta activo sin credencial' % canal.tipo)
+                        self.assertTrue(credencial.access_token_cifrado,
+                                        'el canal %s no tiene token guardado' % canal.tipo)
+                    else:
+                        self.assertIsNone(
+                            credencial, 'el canal %s esta apagado pero tiene credencial viva'
+                            % canal.tipo)
 
 
 class TestIntegridadReferencial(unittest.TestCase):
