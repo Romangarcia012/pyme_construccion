@@ -359,6 +359,25 @@ class TestEsquema(BaseWeb):
 class TestConectar(BaseWeb):
     """GET /integraciones/mercadopago/conectar/<id>."""
 
+    def setUp(self):
+        super().setUp()
+        # El entorno de Mercado Pago se define para TODA la clase, no test por
+        # test, por culpa de test_requiere_login: sin MERCADOPAGO_CLIENT_ID la
+        # ruta le contesta lo mismo a cualquiera -- flashea "no esta
+        # configurada" y redirige a /integraciones -- este o no logueado. El
+        # 302 que afirma ese test se cumplia solo, y habria pasado igual sin el
+        # @login_required en la ruta.
+        #
+        # Con la variable puesta, un request CON sesion se va a
+        # auth.mercadopago.com, asi que el assertNotIn de abajo solo se cumple
+        # si de verdad no hay sesion.
+        #
+        # Los valores son los mismos de siempre y no salen a ningun lado: un
+        # client_id inventado y un redirect a pyme.test.local.
+        entorno = mock.patch.dict(os.environ, ENTORNO_MP)
+        entorno.start()
+        self.addCleanup(entorno.stop)
+
     def test_redirige_a_mercadopago_con_los_parametros_del_flujo(self):
         from urllib.parse import parse_qs, urlparse
 
@@ -426,10 +445,14 @@ class TestConectar(BaseWeb):
             self.assertNotIn('mp_oauth_state', sesion)
 
     def test_requiere_login(self):
+        # El entorno de MP esta puesto por el setUp: con sesion, esta misma
+        # ruta redirige a auth.mercadopago.com. Que NO lo haga es lo que
+        # prueba que el @login_required corto antes.
         resp = request_anonimo(self.ctx, 'get',
                                '/integraciones/mercadopago/conectar/%s' % self.id_roman)
         self.assertEqual(resp.status_code, 302)
         self.assertNotIn('mercadopago.com', resp.headers['Location'])
+        self.assertIn('/login', resp.headers['Location'])
 
 
 class TestCallbackExitoso(BaseWeb):
@@ -1285,9 +1308,24 @@ class TestRutaSincronizar(BaseWeb):
         self.assertEqual(SyncLog.query.count(), 0)
 
     def test_requiere_login(self):
-        resp = request_anonimo(self.ctx, 'post',
-                               '/integraciones/mercadopago/sincronizar/%s' % self.id_roman)
+        # La cuenta se conecta a proposito ANTES del request. Sin credencial,
+        # lanzar_backfill corta en "primero conecta la cuenta" y no escribe
+        # ningun sync_log, asi que el assertEqual(count, 0) de abajo se cumplia
+        # con sesion y sin sesion: el test pasaba igual sin el
+        # @login_required. Con la cuenta conectada, este mismo POST logueado
+        # deja una fila en 'corriendo' (lo prueba
+        # test_deja_la_corrida_marcada_como_corriendo), asi que ahora el 0 solo
+        # puede venir de que no habia sesion.
+        self.conectar(self.id_roman, TOKEN_ROMAN)
+
+        with mock.patch.object(sync_mercadopago.threading, 'Thread') as hilo:
+            resp = request_anonimo(
+                self.ctx, 'post',
+                '/integraciones/mercadopago/sincronizar/%s' % self.id_roman)
+
         self.assertEqual(resp.status_code, 302)
+        self.assertIn('/login', resp.headers['Location'])
+        hilo.assert_not_called()
         self.assertEqual(SyncLog.query.count(), 0)
 
     def test_no_responde_a_get(self):
