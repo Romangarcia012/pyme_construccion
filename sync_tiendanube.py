@@ -5,11 +5,19 @@ Esto es lo unico de la slice que escribe. El cliente HTTP vive en
 `integracion_tiendanube.py` y el mapeo en `ingestor_tiendanube.py`; aca solo
 se decide que se inserta, que se actualiza y que se cuenta.
 
-DISPARO: manual, desde POST /integraciones/tiendanube/sincronizar. Corre en un
-thread daemon con su propio app_context y su propia sesion de SQLAlchemy: la
-respuesta HTTP vuelve enseguida y el worker de gunicorn no se queda esperando
-a la API. No hay Celery, ni RQ, ni Redis, ni scheduler: el volumen (menos de
-500 pedidos/mes) no los justifica y el automatismo es FASE3-S4.
+DISPARO: dos, con el mismo cuerpo.
+
+  - Manual, desde POST /integraciones/tiendanube/sincronizar: corre en un
+    thread daemon con su propio app_context y su propia sesion de SQLAlchemy,
+    asi la respuesta HTTP vuelve enseguida y el worker de gunicorn no se queda
+    esperando a la API.
+  - Periodico, desde scripts/sync_periodico.py, que es lo que ejecuta el Cron
+    Job de Render (FASE-SYNC-CRON-S1): ahi NO hay thread -- el proceso muere
+    apenas el comando retorna, asi que la corrida es sincronica.
+
+Los dos pasan por `_reservar_corrida` y por `correr_backfill`; lo unico que
+cambia es quien espera el resultado. Sigue sin haber Celery, RQ, Redis ni
+webhooks: el volumen (menos de 500 pedidos/mes) no los justifica.
 
 IDEMPOTENCIA: apretar el boton dos veces no puede duplicar nada. Cada escritura
 es un upsert contra la UNIQUE que ya trajo FASE2-S1:
@@ -60,6 +68,12 @@ TTL_CORRIENDO = timedelta(minutes=30)
 # perderia la corrida entera).
 LOTE_COMMIT = 50
 
+TIPO_TIENDANUBE = 'tiendanube'
+
+# El estado que devuelve `correr_sync_ahora` cuando la guarda de concurrencia
+# le nego el turno. No es un error: es "otro lo esta haciendo".
+SALTADO = 'saltado'
+
 
 def _log(mensaje):
     """Detalle tecnico al log del servidor. El thread no tiene request donde
@@ -80,11 +94,14 @@ def _corriendo(canal_id):
             .all())
 
 
-def sync_en_curso(canal_id):
-    """La corrida viva de este canal, o None.
+def _corrida_viva(canal_id):
+    """La corrida viva de este canal, o None. NO commitea.
 
-    Cierra de paso las que quedaron huerfanas: una fila en 'corriendo' de hace
-    horas no es una corrida, es un proceso que se murio.
+    Marca de paso como perdidas las que quedaron huerfanas: una fila en
+    'corriendo' de hace horas no es una corrida, es un proceso que se murio.
+    Deja la transaccion abierta a proposito -- el que llama decide cuando
+    cerrarla, porque `_reservar_corrida` necesita chequear y marcar dentro de
+    la misma transaccion que sostiene el lock.
     """
     vivas = []
     limite = datetime.utcnow() - TTL_CORRIENDO
@@ -96,8 +113,14 @@ def sync_en_curso(canal_id):
             fila.fecha_fin = datetime.utcnow()
         else:
             vivas.append(fila)
-    db.session.commit()
     return vivas[0] if vivas else None
+
+
+def sync_en_curso(canal_id):
+    """La corrida viva de este canal, o None. Para consultas sueltas (la UI)."""
+    viva = _corrida_viva(canal_id)
+    db.session.commit()
+    return viva
 
 
 def ultimo_sync(canal_id):
@@ -158,20 +181,38 @@ def ultimo_sync(canal_id):
 # Disparo
 # ---------------------------------------------------------------------------
 
-def lanzar_backfill(app_obj, canal_id):
-    """Deja la corrida marcada como 'corriendo' y arranca el thread.
+def _reservar_corrida(canal_id):
+    """Toma el turno de sincronizacion del canal (FASE-SYNC-CRON-S1).
 
-    Devuelve (arrancó: bool, mensaje para el usuario). El chequeo de "ya hay
-    uno" es una lectura del ultimo sync_log, no un lock de base: con un solo
-    usuario apretando un boton alcanza, y dos corridas simultaneas tampoco
-    duplicarian filas (todo es upsert), solo gastarian rate limit al pedo.
+    Devuelve (arranque, None) si el turno quedo tomado, o (None, motivo) si ya
+    hay una corrida en curso o el canal no esta conectado.
+
+    Desde que el cron corre solo, "ya hay uno" dejo de ser una lectura
+    informativa y paso a ser la guarda: el boton manual y el cron (o dos
+    corridas del cron, si una se pasa de los 20 minutos) pueden llegar al mismo
+    tiempo sin que nadie lo vea. Por eso el chequeo y la marca van en la MISMA
+    transaccion, detras de un SELECT ... FOR UPDATE sobre la fila de
+    canal_venta: el segundo en llegar espera al primero y recien ahi lee, con
+    las filas en 'corriendo' ya commiteadas. Sin el lock, los dos leerian
+    "libre" al mismo tiempo y arrancarian los dos.
+
+    Es un lock de fila, no una tabla nueva: canal_venta ya existe y ya es el
+    dueno del canal. SQLite ignora el FOR UPDATE (no lo soporta y el dialecto
+    de SQLAlchemy no lo emite), lo cual esta bien: local hay un solo proceso.
     """
-    canal = db.session.get(CanalVenta, canal_id)
+    canal = (CanalVenta.query
+             .filter_by(id=canal_id)
+             .with_for_update()
+             .first())
     if canal is None or not canal.activo:
-        return False, 'El canal de Tiendanube no está conectado.'
+        db.session.rollback()
+        return None, 'El canal de Tiendanube no está conectado.'
 
-    if sync_en_curso(canal_id) is not None:
-        return False, 'Ya hay una sincronización en curso. Esperá a que termine.'
+    if _corrida_viva(canal_id) is not None:
+        # El commit no es cosmetico: cierra las huerfanas que `_corrida_viva`
+        # pudo haber marcado y suelta el lock antes de irse.
+        db.session.commit()
+        return None, 'Ya hay una sincronización en curso. Esperá a que termine.'
 
     arranque = datetime.utcnow()
     for entidad in (ENTIDAD_PRODUCTO, ENTIDAD_PEDIDO):
@@ -180,6 +221,17 @@ def lanzar_backfill(app_obj, canal_id):
             estado='corriendo', fecha_inicio=arranque,
         ))
     db.session.commit()
+    return arranque, None
+
+
+def lanzar_backfill(app_obj, canal_id):
+    """Deja la corrida marcada como 'corriendo' y arranca el thread.
+
+    Devuelve (arrancó: bool, mensaje para el usuario).
+    """
+    arranque, motivo = _reservar_corrida(canal_id)
+    if arranque is None:
+        return False, motivo
 
     hilo = threading.Thread(
         target=_correr_en_contexto, args=(app_obj, canal_id, arranque),
@@ -187,6 +239,44 @@ def lanzar_backfill(app_obj, canal_id):
     )
     hilo.start()
     return True, 'Sincronización iniciada. Actualizá la página en un rato para ver el resultado.'
+
+
+def canales_a_sincronizar():
+    """Los ids de canal de Tiendanube conectados, de todas las empresas.
+
+    El cron no tiene usuario logueado ni empresa "actual", asi que barre todo
+    lo que este activo. Hoy es un solo canal; la lista evita que manana, con
+    dos empresas, alguien tenga que acordarse de tocar el script.
+    """
+    return [canal.id for canal in CanalVenta.query
+            .filter_by(tipo=TIPO_TIENDANUBE, activo=True)
+            .order_by(CanalVenta.id)
+            .all()]
+
+
+def correr_sync_ahora(canal_id):
+    """Corrida completa, sincronica, en el proceso que llama (FASE-SYNC-CRON-S1).
+
+    Misma reserva y mismo cuerpo que el boton manual -- `_reservar_corrida` y
+    `correr_backfill` son literalmente las mismas funciones. Lo unico que
+    cambia es que no hay thread: el cron de Render mata el proceso apenas el
+    comando retorna, asi que un thread daemon moriria a mitad de camino.
+
+    Devuelve (estado, detalle), con estado 'ok' o SALTADO. Si el sync revienta,
+    deja el fallo asentado en sync_log y RE-LANZA: el que llama decide el
+    codigo de salida, y una corrida fallida tiene que verse en los logs.
+    """
+    arranque, motivo = _reservar_corrida(canal_id)
+    if arranque is None:
+        return SALTADO, motivo
+
+    try:
+        return 'ok', correr_backfill(canal_id, arranque)
+    except Exception as exc:  # noqa: BLE001 - se asienta y se re-lanza
+        # Sin esto el sync_log queda en 'corriendo' hasta que venza el TTL de
+        # 30 minutos, y en el medio el boton manual aparece trabado.
+        _cerrar_con_error(canal_id, arranque, exc)
+        raise
 
 
 def _correr_en_contexto(app_obj, canal_id, arranque):
