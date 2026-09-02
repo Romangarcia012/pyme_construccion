@@ -33,6 +33,7 @@ import ingestor_mercadopago as ingestor  # noqa: E402
 import integracion_mercadopago as mp  # noqa: E402
 import sync_mercadopago  # noqa: E402
 from app import app  # noqa: E402
+from tests.ayuda_auth import request_anonimo  # noqa: E402
 from models import (  # noqa: E402
     CanalVenta,
     CredencialCuentaCobro,
@@ -425,8 +426,8 @@ class TestConectar(BaseWeb):
             self.assertNotIn('mp_oauth_state', sesion)
 
     def test_requiere_login(self):
-        anonimo = app.test_client()
-        resp = anonimo.get('/integraciones/mercadopago/conectar/%s' % self.id_roman)
+        resp = request_anonimo(self.ctx, 'get',
+                               '/integraciones/mercadopago/conectar/%s' % self.id_roman)
         self.assertEqual(resp.status_code, 302)
         self.assertNotIn('mercadopago.com', resp.headers['Location'])
 
@@ -1284,8 +1285,8 @@ class TestRutaSincronizar(BaseWeb):
         self.assertEqual(SyncLog.query.count(), 0)
 
     def test_requiere_login(self):
-        anonimo = app.test_client()
-        resp = anonimo.post('/integraciones/mercadopago/sincronizar/%s' % self.id_roman)
+        resp = request_anonimo(self.ctx, 'post',
+                               '/integraciones/mercadopago/sincronizar/%s' % self.id_roman)
         self.assertEqual(resp.status_code, 302)
         self.assertEqual(SyncLog.query.count(), 0)
 

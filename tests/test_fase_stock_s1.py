@@ -46,6 +46,7 @@ from models import (  # noqa: E402
     db,
 )
 from app import app  # noqa: E402
+from tests.ayuda_auth import request_anonimo  # noqa: E402
 
 ENGINE_PRODUCTIVO = None
 
@@ -515,17 +516,11 @@ class TestListadoDeStock(BaseStock):
         self.assertIn('Tiendanube', self.html)
 
     def test_pide_login(self):
-        # El app_context que deja pusheado setUp se saca a proposito antes de
-        # este request: flask_login cachea el usuario en `g`, `g` vive en el
-        # app_context, y Flask reusa el que ya esta arriba en vez de crear uno
-        # nuevo. Sin este pop, un cliente sin cookies igual entraria con el
-        # usuario que dejo cargado el request anterior, y el test pasaria
-        # siempre -- incluso si a la ruta le faltara el @login_required.
-        self.ctx.pop()
-        try:
-            respuesta = app.test_client().get('/productos/listar')
-        finally:
-            self.ctx.push()
+        # request_anonimo da de baja el app_context del test mientras dura el
+        # request. Sin eso, flask_login le serviria a este cliente sin cookies
+        # el usuario que quedo cacheado en `g` por el GET logueado del setUp,
+        # y el test pasaria aunque a la ruta le faltara el @login_required.
+        respuesta = request_anonimo(self.ctx, 'get', '/productos/listar')
 
         self.assertIn(respuesta.status_code, (301, 302))
         self.assertIn('/login', respuesta.headers.get('Location', ''))

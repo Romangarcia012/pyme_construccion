@@ -31,6 +31,7 @@ os.environ.setdefault('SECRET_KEY', 'clave-de-test')
 import cripto  # noqa: E402
 import integracion_tiendanube as tn  # noqa: E402
 from app import app  # noqa: E402
+from tests.ayuda_auth import request_anonimo  # noqa: E402
 from models import CanalVenta, CredencialCanal, Empresa, Usuario, db  # noqa: E402
 
 ENGINE_PRODUCTIVO = None
@@ -144,8 +145,7 @@ class TestConectar(BaseWeb):
         self.assertEqual(CredencialCanal.query.count(), 0)
 
     def test_requiere_login(self):
-        anonimo = app.test_client()
-        resp = anonimo.get('/integraciones/tiendanube/conectar')
+        resp = request_anonimo(self.ctx, 'get', '/integraciones/tiendanube/conectar')
         self.assertEqual(resp.status_code, 302)
         self.assertNotIn('tiendanube.com', resp.headers['Location'])
 
@@ -379,8 +379,7 @@ class TestPaginaIntegraciones(BaseWeb):
         self.assertIn(STORE_ID_FALSO, pagina)
 
     def test_requiere_login(self):
-        anonimo = app.test_client()
-        resp = anonimo.get('/integraciones')
+        resp = request_anonimo(self.ctx, 'get', '/integraciones')
         self.assertEqual(resp.status_code, 302)
 
     def test_no_muestra_canales_de_otra_empresa(self):

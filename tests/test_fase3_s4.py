@@ -38,6 +38,7 @@ from models import (  # noqa: E402
     db,
 )
 from app import app  # noqa: E402
+from tests.ayuda_auth import request_anonimo  # noqa: E402
 
 ENGINE_PRODUCTIVO = None
 
@@ -432,16 +433,15 @@ class TestListado(BaseVentaManual):
 
 class TestRequierenLogin(BaseVentaManual):
     def test_el_formulario_requiere_login(self):
-        anonimo = app.test_client()
-        self.assertEqual(anonimo.get('/pedidos/manual/nuevo').status_code, 302)
+        resp = request_anonimo(self.ctx, 'get', '/pedidos/manual/nuevo')
+        self.assertEqual(resp.status_code, 302)
 
     def test_el_listado_requiere_login(self):
-        anonimo = app.test_client()
-        self.assertEqual(anonimo.get('/pedidos/listar').status_code, 302)
+        resp = request_anonimo(self.ctx, 'get', '/pedidos/listar')
+        self.assertEqual(resp.status_code, 302)
 
     def test_cargar_sin_login_no_escribe_nada(self):
-        anonimo = app.test_client()
-        anonimo.post('/pedidos/manual/nuevo', data={
+        request_anonimo(self.ctx, 'post', '/pedidos/manual/nuevo', data={
             'sku': ['MART-500'], 'cantidad': ['1'],
             'precio_unitario': ['2500.00'], 'medio': 'efectivo'})
         self.assertEqual(Pedido.query.count(), 0)

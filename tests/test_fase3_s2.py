@@ -34,6 +34,7 @@ import integracion_tiendanube as tn  # noqa: E402
 import ingestor_tiendanube  # noqa: E402
 import sync_tiendanube  # noqa: E402
 from app import app  # noqa: E402
+from tests.ayuda_auth import request_anonimo  # noqa: E402
 from ingestor_canal import ENTIDAD_PEDIDO, ENTIDAD_PRODUCTO  # noqa: E402
 from models import (  # noqa: E402
     CanalVenta,
@@ -803,9 +804,9 @@ class TestRuta(BaseSync):
         self.assertIn('Ya hay una sincronización en curso', pagina)
 
     def test_requiere_login(self):
-        anonimo = app.test_client()
         with mock.patch.object(sync_tiendanube.threading, 'Thread') as Hilo:
-            resp = anonimo.post('/integraciones/tiendanube/sincronizar')
+            resp = request_anonimo(self.ctx, 'post',
+                                   '/integraciones/tiendanube/sincronizar')
 
         self.assertEqual(resp.status_code, 302)
         Hilo.assert_not_called()
