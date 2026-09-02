@@ -3,6 +3,8 @@
 FASE3-S1: conectar la tienda de Tiendanube y guardar el token cifrado (OAuth).
 FASE3-S2: disparar el backfill de productos y pedidos y mostrar como salio.
 FASE-MP-S1: conectar las dos cuentas de Mercado Pago y traer sus movimientos.
+FASE-SYNC-CRON-S2: disparar ese mismo backfill desde un cron externo, con
+               un token en header en vez de sesion.
 
 Los canales y las cuentas comparten pagina porque son la misma pregunta vista
 de los dos lados -- por donde entro la venta y adonde entro la plata -- pero
@@ -11,6 +13,7 @@ son dos tablas distintas y dos flujos de OAuth distintos.
 El blueprint se registra en app.py; ninguna ruta existente se toca.
 """
 
+import os
 import secrets
 import sys
 from datetime import datetime
@@ -19,6 +22,7 @@ from flask import (
     Blueprint,
     current_app,
     flash,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -231,6 +235,100 @@ def sincronizar_tiendanube():
 
     flash(mensaje, 'success' if arranco else 'danger')
     return redirect(url_for('integraciones.listar'))
+
+# ============================================================================
+# FASE-SYNC-CRON-S2 - Disparo periodico desde un cron externo
+# ----------------------------------------------------------------------------
+# Un Cron Job de Render tiene costo; cron-job.org es gratis pero vive afuera y
+# no tiene cookies de Flask-Login. De ahi este endpoint: la misma corrida que
+# el boton manual, pero autenticada por un token en un header en vez de por la
+# sesion del navegador.
+#
+# El token va en un HEADER a proposito. En la query string quedaria escrito en
+# el access log de Render, en el historial del proxy y en la pantalla de
+# configuracion de cron-job.org como parte de la URL; un header no aparece en
+# ninguno de esos lados.
+# ============================================================================
+
+HEADER_SYNC = 'X-Sync-Token'
+
+# Variable de entorno propia, NO SECRET_KEY. Si se filtrara este token lo peor
+# que se puede hacer con el es disparar un sync de mas; con SECRET_KEY se
+# firman las sesiones, y compartirlo convertiria una fuga menor en una toma de
+# cuentas.
+VAR_TOKEN_SYNC = 'SYNC_CRON_TOKEN'
+
+
+def _token_sync_valido(recibido):
+    """True solo si el header trae exactamente el token configurado.
+
+    Se lee del entorno en cada request y no al importar el modulo: asi rotar
+    el token en Render es reiniciar el servicio, no tocar codigo.
+
+    Si la variable no esta configurada NADIE pasa. Es la unica postura segura:
+    el error tipico es desplegar el codigo antes que la variable, y con un
+    "si no hay token no pido token" el endpoint quedaria abierto justo en esa
+    ventana.
+
+    La comparacion es `compare_digest` y no `==` para que el tiempo de
+    respuesta no delate cuantos caracteres del token acerto quien prueba.
+    """
+    esperado = os.environ.get(VAR_TOKEN_SYNC)
+    if not esperado or not recibido:
+        return False
+    return secrets.compare_digest(recibido, esperado)
+
+
+@integraciones_bp.route('/tiendanube/sync-externo', methods=['POST'])
+def sync_externo_tiendanube():
+    """Dispara el backfill de todos los canales conectados (FASE-SYNC-CRON-S2).
+
+    Sin @login_required: el que llama es cron-job.org, que no tiene sesion. El
+    header reemplaza al login y es lo unico que separa esto de una ruta
+    publica, asi que se chequea antes de tocar la base.
+
+    La respuesta del 401 es siempre la misma frase, sin importar si el canal
+    existe, si esta conectado o si hay algo corriendo. Un endpoint sin login es
+    una superficie escaneable: no tiene por que contarle nada al que no pasa.
+
+    Recorre `canales_a_sincronizar()` en vez de un id fijo -- el cron no tiene
+    empresa "actual", y con dos empresas manana nadie tiene que acordarse de
+    volver aca.
+
+    Responde enseguida (202) con un renglon por canal. Cada canal arranca en su
+    propio thread daemon via `lanzar_backfill`, igual que el boton manual: si
+    esperara el resultado, cron-job.org cortaria por timeout a los 30 segundos
+    y el sync quedaria a medias sin que nadie lo sepa.
+    """
+    if not _token_sync_valido(request.headers.get(HEADER_SYNC)):
+        # Sin detalle de por que fallo y sin eco del token recibido: este log
+        # lo lee cualquiera que tenga acceso a Render.
+        _log('sync-externo: rechazado por token invalido o ausente')
+        return jsonify({'error': 'no autorizado'}), 401
+
+    app_obj = current_app._get_current_object()
+
+    resultados = []
+    for canal_id in sync_tiendanube.canales_a_sincronizar():
+        try:
+            arranco, mensaje = sync_tiendanube.lanzar_backfill(app_obj, canal_id)
+        except Exception as exc:
+            # Un canal que no pudo ni arrancar no puede dejar sin sync a los
+            # demas: son empresas distintas.
+            db.session.rollback()
+            _log(f'sync-externo: no se pudo lanzar el canal {canal_id}: {exc!r}')
+            resultados.append({'canal_id': canal_id, 'estado': 'error'})
+            continue
+
+        resultados.append({
+            'canal_id': canal_id,
+            'estado': 'arrancado' if arranco else 'saltado',
+            'detalle': mensaje,
+        })
+
+    _log('sync-externo: %d canal(es) procesados' % len(resultados))
+    return jsonify({'canales': resultados}), 202
+
 
 
 # ============================================================================
