@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Resumen de ventas</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container { max-width: 1000px; margin: 0 auto; }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        h1 { color: #fff; font-size: 28px; }
+        .subtitulo { color: #888; font-size: 14px; margin-top: 6px; }
+
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn-volver:hover { background: #555; }
+
+        .grupo { margin-bottom: 30px; }
+
+        h2 {
+            color: #fff;
+            font-size: 18px;
+            margin-bottom: 12px;
+        }
+
+        .tabla-container {
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            overflow-x: auto;
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+
+        th {
+            background: #252525;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #fff;
+            border-bottom: 1px solid #333;
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #333;
+            vertical-align: middle;
+        }
+
+        tr:last-child td { border-bottom: none; }
+
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        th.num { text-align: right; }
+
+        /* La separacion entre "lo que queda" y "lo que salio". Sin ella las
+           dos mitades de la tabla se leen como una sola fila de numeros. */
+        .corte { border-left: 1px solid #333; }
+
+        .sku { color: #777; font-size: 12px; font-family: 'Consolas', monospace; }
+
+        .total td {
+            background: #202020;
+            font-weight: 700;
+            color: #fff;
+            border-top: 1px solid #3a3a3a;
+        }
+
+        /* Un cero no es lo mismo que un numero: se apaga para que los que si
+           tienen ventas salten a la vista. */
+        .cero { color: #555; }
+        .sin-control { color: #777; font-size: 12px; font-style: italic; }
+        .inactivo { color: #777; font-size: 12px; }
+        .vacio { color: #888; padding: 30px; text-align: center; }
+
+        .aclaracion {
+            color: #777;
+            font-size: 13px;
+            margin-top: 15px;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 768px) {
+            table { font-size: 14px; }
+            th, td { padding: 10px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('dashboard') }}" class="btn-volver">← Volver al Dashboard</a>
+
+        <div class="header">
+            <div>
+                <h1>Resumen de ventas</h1>
+                <p class="subtitulo">Cuánto queda y cuánto se vendió, por color y por canal</p>
+            </div>
+        </div>
+
+        {% if grupos or sin_identificar %}
+
+            {% for grupo in grupos %}
+            <div class="grupo">
+                <h2>{{ grupo.nombre }}</h2>
+                <div class="tabla-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Variante</th>
+                                <th class="num">Stock actual</th>
+                                {% for columna in columnas %}
+                                    <th class="num {% if loop.first %}corte{% endif %}">{{ columna }}</th>
+                                {% endfor %}
+                                <th class="num corte">Vendido total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for fila in grupo.filas %}
+                            <tr>
+                                <td>
+                                    {{ fila.variante }}
+                                    {% if not fila.activo %}<span class="inactivo"> (inactivo)</span>{% endif %}
+                                    <br><span class="sku">{{ fila.sku }}</span>
+                                </td>
+                                <td class="num">
+                                    {% if fila.stock is none %}
+                                        <span class="sin-control">sin control</span>
+                                    {% else %}
+                                        {{ fila.stock }}
+                                    {% endif %}
+                                </td>
+                                {% for unidades in fila.por_canal %}
+                                    <td class="num {% if loop.first %}corte{% endif %} {% if not unidades %}cero{% endif %}">{{ unidades }}</td>
+                                {% endfor %}
+                                <td class="num corte {% if not fila.vendido %}cero{% endif %}">{{ fila.vendido }}</td>
+                            </tr>
+                            {% endfor %}
+                            <tr class="total">
+                                <td>TOTAL</td>
+                                <td class="num">
+                                    {% if grupo.total.stock is none %}
+                                        <span class="sin-control">sin control</span>
+                                    {% else %}
+                                        {{ grupo.total.stock }}
+                                    {% endif %}
+                                </td>
+                                {% for unidades in grupo.total.por_canal %}
+                                    <td class="num {% if loop.first %}corte{% endif %}">{{ unidades }}</td>
+                                {% endfor %}
+                                <td class="num corte">{{ grupo.total.vendido }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+            {% endfor %}
+
+            {% if sin_identificar %}
+            <div class="grupo">
+                <h2>{{ sin_identificar.etiqueta }}</h2>
+                <div class="tabla-container">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Concepto</th>
+                                {% for columna in columnas %}
+                                    <th class="num">{{ columna }}</th>
+                                {% endfor %}
+                                <th class="num corte">Vendido total</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td>Ítems vendidos sin producto asociado</td>
+                                {% for unidades in sin_identificar.por_canal %}
+                                    <td class="num {% if not unidades %}cero{% endif %}">{{ unidades }}</td>
+                                {% endfor %}
+                                <td class="num corte">{{ sin_identificar.vendido }}</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+                <p class="aclaracion">
+                    Son líneas de pedidos que llegaron con un producto que el catálogo
+                    todavía no reconoce. Se muestran acá para que la cuenta general
+                    siga cerrando: no tienen stock porque no se sabe de qué producto son.
+                </p>
+            </div>
+            {% endif %}
+
+        {% else %}
+            <div class="tabla-container">
+                <p class="vacio">Todavía no hay productos en el catálogo.</p>
+            </div>
+        {% endif %}
+
+        <p class="aclaracion">
+            El stock lo mantiene Tiendanube y lo descuentan las ventas de mostrador.
+            Lo vendido sale de los pedidos registrados, sin contar los cancelados.
+            El «stock inicial» de la planilla es la suma de las dos columnas.
+        </p>
+    </div>
+</body>
+</html>
