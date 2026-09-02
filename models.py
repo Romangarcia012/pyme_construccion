@@ -123,11 +123,17 @@ class Historial(db.Model):
 
 
 class CanalVenta(db.Model):
-    """Un canal de venta conectado (Tiendanube, Mercado Libre)."""
+    """Un canal de venta: Tiendanube, Mercado Libre, o la carga manual.
+
+    'manual' no es un canal externo. No tiene OAuth ni CredencialCanal y nace
+    activo: lo unico que hace falta para cargar una venta de mostrador es que
+    alguien la tipee. Por eso la invariante "canal activo => credencial activa"
+    solo aplica a los canales externos.
+    """
     __tablename__ = 'canal_venta'
     id = db.Column(db.Integer, primary_key=True)
     empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
-    tipo = db.Column(db.String(30), nullable=False)  # 'tiendanube' | 'mercadolibre'
+    tipo = db.Column(db.String(30), nullable=False)  # 'tiendanube' | 'mercadolibre' | 'manual'
     nombre = db.Column(db.String(100), nullable=False)
     id_tienda_externo = db.Column(db.String(100))
     activo = db.Column(db.Boolean, nullable=False, default=False)
@@ -206,12 +212,20 @@ class MapeoProductoCanal(db.Model):
 
 
 class Pedido(db.Model):
-    """Un pedido tal como lo devuelve el canal, ya normalizado."""
+    """Un pedido tal como lo devuelve el canal, ya normalizado.
+
+    Tambien guarda las ventas de mostrador cargadas a mano (canal 'manual'),
+    que no vienen de ninguna API y por eso no tienen id_externo.
+    """
     __tablename__ = 'pedido'
     id = db.Column(db.Integer, primary_key=True)
     empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'), nullable=False, index=True)
     canal_id = db.Column(db.Integer, db.ForeignKey('canal_venta.id'), nullable=False, index=True)
-    id_externo = db.Column(db.String(100), nullable=False)
+    # NULL solo en las ventas manuales: no hay id del lado de ningun canal.
+    # La UNIQUE (canal_id, id_externo) las deja convivir porque en Postgres un
+    # NULL no colisiona con otro NULL; para los canales externos el upsert
+    # sigue exigiendo el id, asi que la deduplicacion no se afloja.
+    id_externo = db.Column(db.String(100))
     numero_externo = db.Column(db.String(50))
     fecha_pedido = db.Column(db.DateTime, nullable=False, index=True)
     estado = db.Column(db.String(30), nullable=False, default='pendiente')
@@ -225,6 +239,10 @@ class Pedido(db.Model):
     total_envio = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     total_impuestos = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     total = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    # Texto libre que escribe quien carga la venta a mano ("cliente Juan Perez",
+    # "pago la mitad ahora"). No lo llena ningun sync: para los canales
+    # externos el equivalente ya viaja en raw_payload.
+    nota = db.Column(db.Text)
     raw_payload = db.Column(db.JSON)
     fecha_sync = db.Column(db.DateTime)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
@@ -314,21 +332,30 @@ class Liquidacion(db.Model):
 
 class Pago(db.Model):
     """Cobro individual en el procesador. Puede llegar antes que su pedido,
-    por eso pedido_id es opcional."""
+    por eso pedido_id es opcional.
+
+    Las ventas manuales tambien dejan su fila aca, con procesador='manual' e
+    id_externo NULL: todavia no hay ninguna cuenta de cobro conectada, asi que
+    el medio elegido es un dato descriptivo para conciliar mas adelante.
+    """
     __tablename__ = 'pago'
     id = db.Column(db.Integer, primary_key=True)
     pedido_id = db.Column(db.Integer, db.ForeignKey('pedido.id'), index=True)
     canal_id = db.Column(db.Integer, db.ForeignKey('canal_venta.id'), index=True)
     cuenta_cobro_id = db.Column(db.Integer, db.ForeignKey('cuenta_cobro.id'), index=True)
     liquidacion_id = db.Column(db.Integer, db.ForeignKey('liquidacion.id'), index=True)
-    procesador = db.Column(db.String(30), nullable=False)  # 'mercadopago' | 'tiendanube_pagos'
-    id_externo = db.Column(db.String(100), nullable=False)
+    procesador = db.Column(db.String(30), nullable=False)  # 'mercadopago' | 'tiendanube_pagos' | 'manual'
+    # NULL en los pagos manuales: no los emitio ningun procesador.
+    id_externo = db.Column(db.String(100))
     metodo = db.Column(db.String(50))
     cuotas = db.Column(db.Integer)
     estado = db.Column(db.String(30), nullable=False, default='pendiente')
     moneda = db.Column(db.String(3), nullable=False, default='ARS')
     monto_bruto = db.Column(db.Numeric(14, 2), nullable=False, default=0)
-    comision = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    # NULL = "todavia no se sabe cuanto cobro el procesador", que es distinto
+    # de 0 = "no hubo comision". Un cobro en efectivo es 0; uno con tarjeta
+    # queda NULL hasta que la conciliacion real traiga el numero.
+    comision = db.Column(db.Numeric(14, 2))
     impuestos = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     monto_neto = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     fecha_pago = db.Column(db.DateTime, nullable=False, index=True)

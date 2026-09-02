@@ -86,6 +86,10 @@ migrate = Migrate(app, db)  # El esquema lo maneja Alembic, no db.create_all()
 from rutas_integraciones import integraciones_bp
 app.register_blueprint(integraciones_bp)
 
+# CARGA MANUAL DE VENTAS PRESENCIALES (FASE3-S4)
+from rutas_ventas import ventas_bp
+app.register_blueprint(ventas_bp)
+
 @app.route('/')
 def index():
     return redirect(url_for('login'))

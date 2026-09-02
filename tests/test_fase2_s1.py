@@ -326,12 +326,19 @@ class TestEstadoDeLaBaseYDeLosCanales(unittest.TestCase):
         silencio; un canal apagado que se quedo con la credencial viva es un
         token que sigue existiendo sin que nadie lo use, que es justo lo que
         una desconexion tendria que haber dado de baja.
+
+        FASE3-S4 acota el alcance a los canales EXTERNOS. El canal 'manual' que
+        sembro esa slice esta activo y no tiene credencial, y eso es correcto:
+        no hay ninguna API contra la cual autenticarse, la venta la tipea una
+        persona. La regla sigue diciendo lo mismo alli donde significa algo.
         """
         from models import CredencialCanal, db
         # Contexto propio: garantiza sesion nueva y no arrastra nada que haya
         # quedado en la de la clase.
         with app.app_context():
-            canales = db.session.query(CanalVenta).order_by(CanalVenta.id).all()
+            canales = (db.session.query(CanalVenta)
+                       .filter(CanalVenta.tipo != 'manual')
+                       .order_by(CanalVenta.id).all())
 
             for canal in canales:
                 with self.subTest(canal=canal.tipo, canal_id=canal.id):
