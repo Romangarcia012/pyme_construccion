@@ -370,47 +370,6 @@ def nueva_venta_manual():
     return redirect(url_for('ventas.listar_pedidos'))
 
 
-@ventas_bp.route('/listar')
-@login_required
-def listar_pedidos():
-    """Todo lo vendido, venga del canal que venga.
-
-    Sin filtros ni paginacion todavia: es la pantalla minima para que Roman vea
-    lo que cargo sin tener que entrar a Supabase.
-    """
-    pedidos = (Pedido.query
-               .filter_by(empresa_id=current_user.empresa_id)
-               .order_by(Pedido.fecha_pedido.desc(), Pedido.id.desc())
-               .all())
-
-    # El medio de cobro solo se muestra en las ventas manuales: es el unico
-    # canal donde alguien lo eligio a mano. Un pedido puede tener mas de un
-    # pago, asi que se listan todos los medios distintos.
-    filas = []
-    for pedido in pedidos:
-        canal = pedido.canal
-        tipo = canal.tipo if canal else None
-        medios = []
-        if tipo == TIPO_MANUAL:
-            vistos = []
-            for pago in pedido.pagos:
-                etiqueta = dict(MEDIOS_COBRO).get(pago.metodo, pago.metodo)
-                if etiqueta and etiqueta not in vistos:
-                    vistos.append(etiqueta)
-            medios = vistos
-        filas.append({
-            'fecha': pedido.fecha_pedido,
-            'canal': ETIQUETA_CANAL.get(tipo, canal.nombre if canal else '-'),
-            'moneda': pedido.moneda,
-            'total': pedido.total,
-            'estado': pedido.estado,
-            'medios': ', '.join(medios),
-            'nota': pedido.nota,
-        })
-
-    return render_template('pedidos_listar.html', filas=filas)
-
-
 def _medio_de_cobro(pedido, tipo_canal):
     """Con que se cobro la venta, en criollo.
 
@@ -433,14 +392,20 @@ def _medio_de_cobro(pedido, tipo_canal):
     return ''
 
 
-@ventas_bp.route('/resumen')
+@ventas_bp.route('/listar')
 @login_required
-def resumen_ventas():
-    """Una fila por venta, con el estado de despacho al lado.
+def listar_pedidos():
+    """Todo lo vendido, venga del canal que venga: una fila por venta.
 
-    El listado de /pedidos/listar es la pantalla operativa (desde ahi se carga
-    una venta nueva); esta es de solo lectura y agrega las dos columnas que
-    hacian falta para revisar el dia: quien compro y si el pedido ya salio.
+    FASE-REPORTES-S2-MERGE: hasta esta slice esto eran dos pantallas -- este
+    listado operativo (cinco columnas y el boton de venta nueva) y un
+    /pedidos/resumen de solo lectura que repetia esas cinco y agregaba cliente y
+    despacho. Compartian consulta y orden, asi que iban a divergir por accidente
+    y no por diseno. Quedo una sola con las siete columnas y el boton arriba: la
+    vista de solo lectura no le saca nada operativo a nadie.
+
+    Sin filtros ni paginacion, igual que antes: el orden es fijo, lo ultimo
+    vendido primero.
 
     El despacho no se consulta a Tiendanube aca: sale de raw_payload, que el
     sync pisa en cada corrida (ver `Pedido.estado_despacho`).
@@ -473,7 +438,7 @@ def resumen_ventas():
         })
 
     # Cuantas ventas estan esperando salir. Es lo unico que se cuenta arriba
-    # porque es la unica pregunta que se hace mirando este reporte de apuro.
+    # porque es la unica pregunta que se hace mirando esta pantalla de apuro.
     pendientes = sum(1 for fila in filas if fila['despacho'] == DESPACHO_NO)
 
-    return render_template('ventas_resumen.html', filas=filas, pendientes=pendientes)
+    return render_template('pedidos_listar.html', filas=filas, pendientes=pendientes)

@@ -260,13 +260,17 @@ class TestMapeoDeDespacho(BaseDespacho):
 
 
 class TestListadoDeVentas(BaseDespacho):
-    """La pantalla: una fila por venta con la columna de despacho."""
+    """La pantalla: una fila por venta con la columna de despacho.
+
+    Vive en /pedidos/listar desde FASE-REPORTES-S2-MERGE; antes era una
+    segunda pantalla de solo lectura en /pedidos/resumen.
+    """
 
     def test_muestra_una_fila_por_venta_con_su_despacho(self):
         self.pedido_tn(PAYLOAD_REAL)
         self.venta_mostrador(medio='efectivo')
 
-        resp = self.client.get('/pedidos/resumen')
+        resp = self.client.get('/pedidos/listar')
         self.assertEqual(resp.status_code, 200)
         html = resp.get_data(as_text=True)
 
@@ -283,7 +287,7 @@ class TestListadoDeVentas(BaseDespacho):
                                         status='DISPATCHED')]
         self.pedido_tn(payload)
 
-        html = self.client.get('/pedidos/resumen').get_data(as_text=True)
+        html = self.client.get('/pedidos/listar').get_data(as_text=True)
         # Se mira el span de la fila y no el nombre de la clase suelto: los
         # cuatro estados aparecen igual en el <style> de la plantilla.
         self.assertIn('<span class="despacho despacho-si">', html)
@@ -296,11 +300,11 @@ class TestListadoDeVentas(BaseDespacho):
         self.pedido_tn({'shipping_status': 'shipped'}, id_externo='tres')
         self.venta_mostrador()
 
-        html = self.client.get('/pedidos/resumen').get_data(as_text=True)
+        html = self.client.get('/pedidos/listar').get_data(as_text=True)
         self.assertIn('2 ventas todavía sin despachar', html)
 
     def test_sin_ventas_no_explota(self):
-        resp = self.client.get('/pedidos/resumen')
+        resp = self.client.get('/pedidos/listar')
         self.assertEqual(resp.status_code, 200)
         self.assertIn('Todavía no hay ventas cargadas', resp.get_data(as_text=True))
 
@@ -318,12 +322,12 @@ class TestListadoDeVentas(BaseDespacho):
                               total=Decimal('99999.00'), raw_payload=PAYLOAD_REAL))
         db.session.commit()
 
-        html = self.client.get('/pedidos/resumen').get_data(as_text=True)
+        html = self.client.get('/pedidos/listar').get_data(as_text=True)
         self.assertNotIn('Cliente Ajeno', html)
         self.assertNotIn('99999', html)
 
     def test_requiere_login(self):
-        resp = request_anonimo(self.ctx, 'get', '/pedidos/resumen')
+        resp = request_anonimo(self.ctx, 'get', '/pedidos/listar')
         self.assertEqual(resp.status_code, 302)
         self.assertIn('/login', resp.headers['Location'])
 

@@ -14,7 +14,7 @@
             padding: 20px;
         }
 
-        .container { max-width: 1000px; margin: 0 auto; }
+        .container { max-width: 1100px; margin: 0 auto; }
 
         .header {
             display: flex;
@@ -55,26 +55,37 @@
         }
         .btn-nueva:hover { background: #20c997; }
 
+        .pendientes {
+            background: rgba(224, 168, 0, 0.1);
+            border-left: 4px solid #e0a800;
+            color: #ffd43b;
+            padding: 12px 15px;
+            border-radius: 6px;
+            font-size: 14px;
+            margin-bottom: 20px;
+        }
+
         .tabla-container {
             background: #1a1a1a;
             border-radius: 8px;
             border: 1px solid #2a2a2a;
-            overflow: hidden;
+            overflow-x: auto;
         }
 
         table { width: 100%; border-collapse: collapse; }
 
         th {
             background: #252525;
-            padding: 15px;
+            padding: 12px 15px;
             text-align: left;
             font-weight: 600;
             color: #fff;
             border-bottom: 1px solid #333;
+            white-space: nowrap;
         }
 
         td {
-            padding: 15px;
+            padding: 12px 15px;
             border-bottom: 1px solid #333;
             vertical-align: middle;
         }
@@ -82,8 +93,12 @@
         tr:last-child td { border-bottom: none; }
         tr:hover { background: #252525; }
 
-        .total { text-align: right; font-variant-numeric: tabular-nums; }
-        th.total { text-align: right; }
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        th.num { text-align: right; }
+
+        /* La separacion entre "la venta" y "como quedo". Sin ella las columnas
+           de estado se leen como parte de los datos del pedido. */
+        .corte { border-left: 1px solid #333; }
 
         .canal {
             background: rgba(255, 255, 255, 0.08);
@@ -98,7 +113,30 @@
         .estado { color: #aaa; font-size: 13px; }
         .medio { color: #888; font-size: 13px; }
         .nota { color: #777; font-size: 12px; display: block; margin-top: 4px; }
+        .apagado { color: #555; }
         .vacio { color: #888; padding: 30px; text-align: center; }
+
+        /* El despacho es la columna que se mira de apuro: los cuatro estados se
+           distinguen por color para no tener que leer palabra por palabra. */
+        .despacho {
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            display: inline-block;
+            white-space: nowrap;
+        }
+        .despacho-si { background: rgba(40, 167, 69, 0.15); color: #51cf66; }
+        .despacho-no { background: rgba(224, 168, 0, 0.15); color: #ffd43b; }
+        .despacho-mostrador { background: rgba(255, 255, 255, 0.06); color: #999; }
+        .despacho-sin_dato { color: #555; }
+
+        .aclaracion {
+            color: #777;
+            font-size: 13px;
+            margin-top: 15px;
+            line-height: 1.5;
+        }
 
         @media (max-width: 768px) {
             table { font-size: 14px; }
@@ -113,8 +151,10 @@
         <div class="header">
             <div>
                 <h1>Ventas</h1>
-                <p class="subtitulo">Todos los canales, online y mostrador</p>
+                <p class="subtitulo">Todos los canales, online y mostrador, con el estado de despacho al lado</p>
             </div>
+            {# El boton va arriba de la tabla y fuera del bloque de filas: con la
+               base vacia es justo cuando mas hace falta tenerlo a mano. #}
             <a href="{{ url_for('ventas.nueva_venta_manual') }}" class="btn-nueva">+ Nueva venta manual</a>
         </div>
 
@@ -128,37 +168,70 @@
             {% endif %}
         {% endwith %}
 
-        <div class="tabla-container">
-            {% if filas %}
-            <table>
-                <thead>
-                    <tr>
-                        <th>Fecha</th>
-                        <th>Canal</th>
-                        <th class="total">Total</th>
-                        <th>Estado</th>
-                        <th>Medio de pago</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for fila in filas %}
+        {% if filas %}
+
+            {% if pendientes %}
+            <p class="pendientes">
+                {{ pendientes }} venta{{ 's' if pendientes != 1 }} todavía sin despachar.
+            </p>
+            {% endif %}
+
+            <div class="tabla-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Fecha</th>
+                            <th>Canal</th>
+                            <th>Cliente</th>
+                            <th class="num">Total</th>
+                            <th>Medio de cobro</th>
+                            <th class="corte">Estado</th>
+                            <th>Despacho</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for fila in filas %}
                         <tr>
                             <td>{{ fila.fecha.strftime('%d/%m/%Y') if fila.fecha else '-' }}</td>
                             <td><span class="canal">{{ fila.canal }}</span></td>
-                            <td class="total">{{ fila.moneda }} {{ '%.2f'|format(fila.total) }}</td>
-                            <td><span class="estado">{{ fila.estado }}</span></td>
                             <td>
-                                <span class="medio">{{ fila.medios or '-' }}</span>
+                                {% if fila.cliente %}
+                                    {{ fila.cliente }}
+                                {% else %}
+                                    <span class="apagado">—</span>
+                                {% endif %}
                                 {% if fila.nota %}<span class="nota">{{ fila.nota }}</span>{% endif %}
                             </td>
+                            <td class="num">{{ fila.moneda }} {{ '%.2f'|format(fila.total) }}</td>
+                            <td>
+                                {% if fila.medio %}
+                                    <span class="medio">{{ fila.medio }}</span>
+                                {% else %}
+                                    <span class="apagado">—</span>
+                                {% endif %}
+                            </td>
+                            <td class="corte"><span class="estado">{{ fila.estado }}</span></td>
+                            <td>
+                                <span class="despacho despacho-{{ fila.despacho }}">{{ fila.despacho_etiqueta }}</span>
+                            </td>
                         </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-            {% else %}
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+
+        {% else %}
+            <div class="tabla-container">
                 <p class="vacio">Todavía no hay ventas cargadas.</p>
-            {% endif %}
-        </div>
+            </div>
+        {% endif %}
+
+        <p class="aclaracion">
+            El despacho lo informa Tiendanube y se lee en cada carga de esta pantalla,
+            así que refleja lo último que trajo el sync. <strong>Mostrador</strong> es la
+            venta presencial: se entrega en el acto y no tiene despacho que seguir.
+            El guion es un pedido que llegó sin información de envío.
+        </p>
     </div>
 </body>
 </html>

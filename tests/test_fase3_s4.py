@@ -399,15 +399,20 @@ class TestListado(BaseVentaManual):
         self.assertIn('5000.00', pagina)   # el de Tiendanube
         self.assertIn('Efectivo', pagina)  # el medio de la venta manual
 
-    def test_el_medio_solo_aparece_en_las_ventas_manuales(self):
-        """El pedido de Tiendanube no tiene medio elegido a mano: su fila
-        muestra un guion, no el medio de la venta de al lado."""
+    def test_el_medio_de_una_venta_no_se_le_pega_a_la_de_al_lado(self):
+        """Cada fila muestra su propio medio de cobro.
+
+        El pedido de este helper entro sin raw_payload -- como los que trajo
+        el sync antes de que se guardara la pasarela -- asi que no tiene medio
+        que mostrar y su celda queda con el guion, no con el "Tarjeta" del
+        mostrador de al lado.
+        """
         self.pedido_tiendanube()
         self.cargar([('MART-500', 1, '2500.00')], medio='tarjeta')
 
         pagina = self.client.get('/pedidos/listar').get_data(as_text=True)
         self.assertIn('Tarjeta', pagina)
-        self.assertIn('>-<', pagina.replace(' ', '').replace('\n', ''))
+        self.assertIn('<span class="apagado">—</span>', pagina)
 
     def test_no_muestra_pedidos_de_otra_empresa(self):
         otra = Empresa(nombre='Ferreteria Ajena')
