@@ -217,6 +217,81 @@ class MapeoProductoCanal(db.Model):
     )
 
 
+# --- Estado de despacho (FASE-REPORTES-S2) -----------------------------------
+#
+# "¿Este pedido ya salio?" es un dato que Tiendanube manda y que ya se guarda
+# entero dentro de pedido.raw_payload. NO tiene columna propia y es a proposito:
+# con menos de 500 pedidos por mes calcularlo al vuelo cuesta nada, y una
+# columna se congelaria en lo que decia el payload el dia que se sincronizo por
+# primera vez. Como el sync pisa raw_payload en cada corrida (sync_tiendanube
+# _upsert_pedido), leerlo derivado es lo unico que refleja el estado de hoy.
+DESPACHO_SI = 'si'
+DESPACHO_NO = 'no'
+# La venta de mostrador se entrega en el acto: no tiene despacho que reportar.
+DESPACHO_MOSTRADOR = 'mostrador'
+# Un pedido de canal externo cuyo payload no trae informacion de despacho.
+# No es lo mismo que 'mostrador': ahi el dato no aplica, aca falta.
+DESPACHO_SIN_DATO = 'sin_dato'
+
+# Vocabulario de fulfillments[].status de Tiendanube. Fuente:
+# https://tiendanube.github.io/api-documentation/resources/fulfillment-order
+#
+#   UNPACKED          preparacion no empezada
+#   IN_PREPARATION    picking / packing / produccion
+#   PACKED            listo para despachar o retirar, todavia en el local
+#   DISPATCHED        despachado             <- salio
+#   READY_FOR_PICKUP  listo para que lo retiren
+#   DELIVERED         entregado              <- salio
+#
+# READY_FOR_PICKUP queda del lado de "no": la documentacion lo rechaza para el
+# tipo de envio 'ship', y en el pickup no despachable (retiro en el local) el
+# flujo va PACKED -> READY_FOR_PICKUP, o sea que la mercaderia sigue en poder
+# del vendedor esperando que el cliente pase. Cuando el retiro es en sucursal
+# de un correo, ese envio si es despachable y pasa por DISPATCHED.
+FULFILLMENT_DESPACHADOS = {'DISPATCHED', 'DELIVERED'}
+
+# Vocabulario de order.shipping_status, que es el respaldo cuando el pedido no
+# trae fulfillments. Conviven dos generaciones de nombres en la documentacion
+# ('shipped'/'fulfilled' para lo mismo), asi que se aceptan las dos. Fuente:
+# https://tiendanube.github.io/api-documentation/resources/order y
+# https://tiendanube.github.io/api-documentation/guides/multi-inventory
+#
+#   unpacked / unshipped / packed / partially_packed / partially_fulfilled -> no
+#   shipped / fulfilled / delivered                                        -> si
+SHIPPING_STATUS_DESPACHADOS = {'shipped', 'fulfilled', 'delivered'}
+
+
+def _despacho_de_payload(payload):
+    """DESPACHO_SI / DESPACHO_NO / DESPACHO_SIN_DATO a partir del payload crudo.
+
+    Un pedido puede tener mas de un fulfillment (dos paquetes que salen de
+    depositos distintos). Solo cuenta como despachado cuando salieron TODOS: si
+    falta uno, la respuesta util a "¿me puedo olvidar de este pedido?" es que no.
+    """
+    if not isinstance(payload, dict):
+        return DESPACHO_SIN_DATO
+
+    # Los fulfillments son la fuente preferida: el shipping_status del pedido
+    # esta deprecado del lado de Tiendanube y es un resumen de estos.
+    fulfillments = payload.get('fulfillments')
+    if isinstance(fulfillments, list) and fulfillments:
+        # La API puede devolver solo los ids en vez de los objetos completos.
+        # En ese caso aca no hay estado que leer y se cae al shipping_status.
+        estados = [f.get('status') for f in fulfillments if isinstance(f, dict)]
+        estados = [e for e in estados if e]
+        if len(estados) == len(fulfillments):
+            todos = all(str(e).upper() in FULFILLMENT_DESPACHADOS for e in estados)
+            return DESPACHO_SI if todos else DESPACHO_NO
+
+    shipping_status = payload.get('shipping_status')
+    if shipping_status:
+        return (DESPACHO_SI
+                if str(shipping_status).lower() in SHIPPING_STATUS_DESPACHADOS
+                else DESPACHO_NO)
+
+    return DESPACHO_SIN_DATO
+
+
 class Pedido(db.Model):
     """Un pedido tal como lo devuelve el canal, ya normalizado.
 
@@ -261,6 +336,19 @@ class Pedido(db.Model):
     __table_args__ = (
         db.UniqueConstraint('canal_id', 'id_externo', name='uq_pedido_canal_id_externo'),
     )
+
+    @property
+    def estado_despacho(self):
+        """¿Ya salio el pedido? Derivado de raw_payload, sin columna propia.
+
+        No se confunde con `estado` / `estado_externo` (el vocabulario de
+        Tiendanube para la venta: open/closed/cancelled, paid/...) ni con
+        `total_envio`, que es plata. Un pedido pagado y cerrado puede no haber
+        salido todavia.
+        """
+        if self.canal is not None and self.canal.tipo == 'manual':
+            return DESPACHO_MOSTRADOR
+        return _despacho_de_payload(self.raw_payload)
 
 
 class PedidoItem(db.Model):

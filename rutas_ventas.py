@@ -29,9 +29,21 @@ from flask import (
     url_for,
 )
 from flask_login import current_user, login_required
+from sqlalchemy.orm import joinedload
 
 import stock_tiendanube
-from models import CanalVenta, Pago, Pedido, PedidoItem, Producto, db
+from models import (
+    DESPACHO_MOSTRADOR,
+    DESPACHO_NO,
+    DESPACHO_SI,
+    DESPACHO_SIN_DATO,
+    CanalVenta,
+    Pago,
+    Pedido,
+    PedidoItem,
+    Producto,
+    db,
+)
 
 ventas_bp = Blueprint('ventas', __name__, url_prefix='/pedidos')
 
@@ -66,6 +78,16 @@ ETIQUETA_CANAL = {
     'tiendanube': 'Tiendanube',
     'mercadolibre': 'Mercado Libre',
     TIPO_MANUAL: 'Manual',
+}
+
+# Como se lee en pantalla el estado de despacho que deriva `Pedido`. El guion
+# es para el pedido de un canal externo cuyo payload no trajo el dato: decir
+# "No" ahi seria afirmar algo que no se sabe.
+ETIQUETA_DESPACHO = {
+    DESPACHO_SI: 'Sí',
+    DESPACHO_NO: 'No',
+    DESPACHO_MOSTRADOR: 'Mostrador',
+    DESPACHO_SIN_DATO: '—',
 }
 
 
@@ -387,3 +409,71 @@ def listar_pedidos():
         })
 
     return render_template('pedidos_listar.html', filas=filas)
+
+
+def _medio_de_cobro(pedido, tipo_canal):
+    """Con que se cobro la venta, en criollo.
+
+    Dos origenes distintos porque el dato vive en dos lados: la venta de
+    mostrador escribe una fila en `pago` con el medio que eligio el vendedor;
+    el pedido de Tiendanube no deja fila en `pago` (el sync no las crea), pero
+    trae el nombre de la pasarela dentro de raw_payload.
+    """
+    if tipo_canal == TIPO_MANUAL:
+        vistos = []
+        for pago in pedido.pagos:
+            etiqueta = dict(MEDIOS_COBRO).get(pago.metodo, pago.metodo)
+            if etiqueta and etiqueta not in vistos:
+                vistos.append(etiqueta)
+        return ', '.join(vistos)
+
+    payload = pedido.raw_payload
+    if isinstance(payload, dict):
+        return payload.get('gateway_name') or payload.get('gateway') or ''
+    return ''
+
+
+@ventas_bp.route('/resumen')
+@login_required
+def resumen_ventas():
+    """Una fila por venta, con el estado de despacho al lado.
+
+    El listado de /pedidos/listar es la pantalla operativa (desde ahi se carga
+    una venta nueva); esta es de solo lectura y agrega las dos columnas que
+    hacian falta para revisar el dia: quien compro y si el pedido ya salio.
+
+    El despacho no se consulta a Tiendanube aca: sale de raw_payload, que el
+    sync pisa en cada corrida (ver `Pedido.estado_despacho`).
+    """
+    pedidos = (Pedido.query
+               .options(joinedload(Pedido.canal), joinedload(Pedido.pagos))
+               .filter_by(empresa_id=current_user.empresa_id)
+               .order_by(Pedido.fecha_pedido.desc(), Pedido.id.desc())
+               .all())
+
+    filas = []
+    for pedido in pedidos:
+        canal = pedido.canal
+        tipo = canal.tipo if canal else None
+        despacho = pedido.estado_despacho
+        filas.append({
+            'fecha': pedido.fecha_pedido,
+            'canal': ETIQUETA_CANAL.get(tipo, canal.nombre if canal else '-'),
+            # El pedido online trae el nombre del comprador; la venta de
+            # mostrador no pide ninguno, y la nota es texto libre que puede no
+            # ser un nombre. Antes que inventar un cliente, va el guion.
+            'cliente': pedido.comprador_nombre or '',
+            'moneda': pedido.moneda,
+            'total': pedido.total,
+            'medio': _medio_de_cobro(pedido, tipo),
+            'estado': pedido.estado,
+            'despacho': despacho,
+            'despacho_etiqueta': ETIQUETA_DESPACHO.get(despacho, despacho),
+            'nota': pedido.nota,
+        })
+
+    # Cuantas ventas estan esperando salir. Es lo unico que se cuenta arriba
+    # porque es la unica pregunta que se hace mirando este reporte de apuro.
+    pendientes = sum(1 for fila in filas if fila['despacho'] == DESPACHO_NO)
+
+    return render_template('ventas_resumen.html', filas=filas, pendientes=pendientes)
