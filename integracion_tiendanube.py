@@ -1,10 +1,11 @@
 """Cliente HTTP de Tiendanube.
 
-Dos capas, agregadas en dos slices:
+Tres capas, agregadas en tres slices:
 
   - FASE3-S1: el OAuth (intercambiar_code, traer_tienda).
   - FASE3-S2: la lectura del catalogo y de los pedidos (traer_productos,
     traer_pedidos), con paginacion y freno de rate limit.
+  - FASE-STOCK-S1: la unica escritura (actualizar_stock_variante).
 
 Ninguna funcion de este modulo toca la base: hablan con la API y devuelven
 dicts crudos. Quien persiste es la ruta del callback (S1) o el sincronizador
@@ -405,3 +406,104 @@ def traer_pedidos(store_id, access_token, desde=None, hasta=None):
     if hasta is not None:
         params['updated_at_max'] = hasta.strftime('%Y-%m-%dT%H:%M:%S+00:00')
     return paginar('%s/orders' % store_id, access_token, params=params or None)
+
+
+# ============================================================================
+# FASE-STOCK-S1 - Escritura de stock
+# ----------------------------------------------------------------------------
+# Lo primero que este modulo ESCRIBE del lado de Tiendanube. Hasta esta slice
+# todo era GET; el permiso "Edit Products" que Roman agrego a la app habilita
+# este unico verbo y nada mas: no se tocan pedidos ni clientes aunque el token
+# alcance para hacerlo.
+#
+# El endpoint es el de la variante puntual:
+#
+#     PUT /{store_id}/products/{product_id}/variants/{variant_id}
+#     {"stock": 7}
+#
+# (doc: tiendanube.github.io/api-documentation/resources/product-variant)
+#
+# Se manda SOLO `stock`. El PUT de una variante acepta muchos campos mas
+# (price, sku, weight, cost) y mandarlos seria pisar con datos nuestros lo que
+# el comerciante tenga cargado en la tienda. `stock_management` ni siquiera es
+# escribible por API: lo maneja Tiendanube.
+#
+# Sobre multi-inventario: en las tiendas con varias sucursales el stock real
+# vive en `inventory_levels` y `variant.stock` figura como deprecado, pero la
+# doc aclara que se sigue soportando y que un PUT con `stock` actualiza el
+# primer inventory_level de la variante. Con una sola sucursal -- el caso de
+# Roman -- eso es exactamente el stock de la tienda. Si algun dia se abre un
+# segundo deposito, esta funcion hay que rehacerla contra inventory_levels.
+# ============================================================================
+
+def _put_api(ruta, access_token, cuerpo):
+    """PUT a la API con la misma politica de rate limit que _get_api.
+
+    Devuelve el Response crudo. Se reintenta solo el 429: un PUT de stock es
+    idempotente (manda un valor absoluto, no un delta), asi que repetirlo no
+    puede descontar dos veces.
+    """
+    url = '%s/%s' % (URL_API.format(version=VERSION_API), ruta)
+
+    for intento in range(MAX_REINTENTOS_429 + 1):
+        try:
+            resp = requests.put(url, headers=_headers(access_token),
+                                json=cuerpo, timeout=TIMEOUT)
+        except requests.RequestException as exc:
+            raise ErrorTiendanube(
+                'No se pudo contactar a la API de Tiendanube.',
+                detalle='%s en PUT %s: %s' % (type(exc).__name__, ruta, exc)
+            ) from exc
+
+        if resp.status_code != 429:
+            _frenar_si_el_balde_esta_lleno(resp)
+            return resp
+
+        if intento >= MAX_REINTENTOS_429:
+            break
+        time.sleep(_espera_tras_429(resp, intento))
+
+    raise ErrorTiendanube(
+        'Tiendanube esta limitando las consultas. Proba de nuevo en un rato.',
+        detalle='429 persistente en PUT %s tras %d reintentos' % (ruta, MAX_REINTENTOS_429)
+    )
+
+
+def actualizar_stock_variante(store_id, id_producto, id_variante, stock, access_token):
+    """Deja el stock de una variante en `stock`. Devuelve el body de la respuesta.
+
+    `stock` es el valor final, no un descuento: si la llamada se repite el
+    resultado es el mismo.
+
+    Los mensajes de error estan separados por causa porque cada uno se arregla
+    distinto: el 401/403 es "falta el permiso, reconecta la tienda" y el 404 es
+    "ese producto ya no existe en Tiendanube, revisa el mapeo".
+    """
+    ruta = '%s/products/%s/variants/%s' % (store_id, id_producto, id_variante)
+    resp = _put_api(ruta, access_token, {'stock': int(stock)})
+
+    if resp.status_code in (401, 403):
+        raise ErrorTiendanube(
+            'Tiendanube no autoriza a modificar el stock: a la app le falta el '
+            'permiso para editar productos. Volve a conectar la tienda.',
+            detalle='HTTP %s en PUT %s: %s' % (resp.status_code, ruta, _recorte(resp))
+        )
+
+    if resp.status_code == 404:
+        raise ErrorTiendanube(
+            'Tiendanube no encontro ese producto. Puede que lo hayan borrado de '
+            'la tienda; resincronizá el catálogo.',
+            detalle='HTTP 404 en PUT %s: %s' % (ruta, _recorte(resp))
+        )
+
+    if resp.status_code not in (200, 201):
+        raise ErrorTiendanube(
+            'Tiendanube rechazó la actualización de stock.',
+            detalle='HTTP %s en PUT %s: %s' % (resp.status_code, ruta, _recorte(resp))
+        )
+
+    try:
+        return resp.json()
+    except ValueError:
+        # El stock ya quedo escrito; que el body no sea JSON no lo deshace.
+        return {}

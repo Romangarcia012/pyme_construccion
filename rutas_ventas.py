@@ -5,9 +5,14 @@ vendedor en el momento -- pero termina en las mismas tres tablas que las de
 Tiendanube (pedido / pedido_item / pago), para que despues un solo reporte
 pueda sumar todos los canales sin tratar a este como un caso aparte.
 
-Lo que NO hace esta slice: ninguna llamada HTTP, ninguna cuenta de cobro
-conectada. El medio de cobro que se guarda es descriptivo, para poder conciliar
-cuando exista la integracion con MercadoPago.
+El medio de cobro que se guarda es descriptivo, para poder conciliar cuando
+exista la integracion con MercadoPago; ninguna cuenta de cobro conectada
+interviene aca.
+
+FASE-STOCK-S1 le agrego dos cosas a la venta: descuenta `producto.stock` en la
+misma transaccion, y despues de commitear le avisa a Tiendanube el numero nuevo
+(ver `stock_tiendanube.py`). Esa es la unica llamada HTTP de este modulo, y no
+puede voltear una venta ya guardada: si falla, se avisa y se sigue.
 
 El blueprint se registra en app.py; ninguna ruta existente se toca.
 """
@@ -25,6 +30,7 @@ from flask import (
 )
 from flask_login import current_user, login_required
 
+import stock_tiendanube
 from models import CanalVenta, Pago, Pedido, PedidoItem, Producto, db
 
 ventas_bp = Blueprint('ventas', __name__, url_prefix='/pedidos')
@@ -164,9 +170,53 @@ def _leer_items(form, productos_por_sku):
     return items
 
 
+def _descontar_stock(items):
+    """Resta del stock lo que se acaba de vender. FASE-STOCK-S1.
+
+    Corre dentro de la misma transaccion que el pedido: o se guarda la venta
+    con su descuento, o no se guarda nada.
+
+    Tres reglas:
+
+    - `stock` NULL es "nadie lleva la cuenta de este producto", no "hay cero".
+      Esos productos no se tocan (y despues tampoco se empujan a Tiendanube).
+    - Un resultado negativo se guarda como 0. La venta ya ocurrio fisicamente:
+      el mostrador entrego la mercaderia y no hay forma de bloquearla desde
+      aca. Un stock negativo no describiria nada real, un 0 si.
+    - Ese caso igual se devuelve para avisarlo: vender mas de lo que el sistema
+      creia tener significa que el numero venia mal, y alguien tiene que
+      enterarse.
+
+    Devuelve (sobrevendidos, producto_ids): los nombres a avisar y los ids
+    cuyo stock cambio, que son los unicos que hay que empujar a la tienda.
+    """
+    sobrevendidos = []
+    producto_ids = []
+
+    for item in items:
+        producto = item['producto']
+        if producto.stock is None:
+            continue
+
+        restante = producto.stock - item['cantidad']
+        if restante < 0:
+            restante = 0
+            if producto.nombre not in sobrevendidos:
+                sobrevendidos.append(producto.nombre)
+
+        producto.stock = restante
+        if producto.id not in producto_ids:
+            producto_ids.append(producto.id)
+
+    return sobrevendidos, producto_ids
+
+
 def _armar_venta(canal, items, fecha, medio, nota):
-    """Escribe pedido + items + pago. No commitea: el commit lo hace la ruta,
-    para que las tres tablas entren o no entren juntas."""
+    """Escribe pedido + items + pago, y descuenta el stock vendido.
+
+    No commitea: el commit lo hace la ruta, para que las cuatro escrituras
+    entren o no entren juntas.
+    """
     total = sum((item['subtotal'] for item in items), Decimal('0.00'))
 
     pedido = Pedido(
@@ -221,8 +271,11 @@ def _armar_venta(canal, items, fecha, medio, nota):
         fecha_pago=fecha,
         fecha_acreditacion=fecha if en_efectivo else None,
     ))
+
+    sobrevendidos, producto_ids = _descontar_stock(items)
+
     db.session.flush()
-    return pedido
+    return pedido, sobrevendidos, producto_ids
 
 
 @ventas_bp.route('/manual/nuevo', methods=['GET', 'POST'])
@@ -249,8 +302,10 @@ def nueva_venta_manual():
             raise DatosInvalidos('Elegi un medio de cobro.')
 
         items = _leer_items(request.form, {p.sku: p for p in productos})
-        pedido = _armar_venta(_canal_manual(), items, fecha, medio, enviado['nota'])
+        pedido, sobrevendidos, producto_ids = _armar_venta(
+            _canal_manual(), items, fecha, medio, enviado['nota'])
         db.session.commit()
+        total_vendido = pedido.total
     except DatosInvalidos as error:
         db.session.rollback()
         flash(str(error), 'error')
@@ -266,7 +321,30 @@ def nueva_venta_manual():
                                medios=MEDIOS_COBRO, hoy=date.today().isoformat(),
                                enviado=enviado)
 
-    flash('Venta registrada por %s %s.' % (MONEDA_DEFECTO, pedido.total), 'success')
+    flash('Venta registrada por %s %s.' % (MONEDA_DEFECTO, total_vendido), 'success')
+
+    # Todo lo que sigue pasa DESPUES del commit y a proposito: la venta ya esta
+    # guardada y ninguno de estos avisos la puede deshacer.
+    if sobrevendidos:
+        flash('Se vendió más de lo que figuraba en stock para: %s. El stock quedó '
+              'en 0; revisá el conteo real.' % ', '.join(sobrevendidos), 'warning')
+
+    # El push a Tiendanube es lo unico de esta ruta que sale a internet. Se
+    # envuelve entero por las dudas: un fallo que stock_tiendanube no haya
+    # previsto no puede terminar en un 500 sobre una venta ya cobrada.
+    try:
+        fallidos = stock_tiendanube.empujar_stock(current_user.empresa_id, producto_ids)
+    except Exception:  # noqa: BLE001
+        # El rollback va primero: si lo que se rompio dejo la sesion sucia,
+        # leer los nombres para el aviso volveria a fallar. La venta ya esta
+        # commiteada, asi que no hay nada suyo que perder.
+        db.session.rollback()
+        fallidos = [p.nombre for p in productos if p.id in producto_ids]
+
+    if fallidos:
+        flash('Venta guardada, pero no se pudo actualizar el stock en Tiendanube '
+              'para: %s — revisalo a mano.' % ', '.join(fallidos), 'warning')
+
     return redirect(url_for('ventas.listar_pedidos'))
 
 

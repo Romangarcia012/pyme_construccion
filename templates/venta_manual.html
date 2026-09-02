@@ -162,7 +162,7 @@
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
-                    <div style="padding: 15px; margin-bottom: 20px; border-radius: 6px; border-left: 4px solid {% if category == 'success' %}#28a745{% else %}#dc3545{% endif %}; background: {% if category == 'success' %}rgba(40, 167, 69, 0.1){% else %}rgba(220, 53, 69, 0.1){% endif %}; color: {% if category == 'success' %}#51cf66{% else %}#ff6b6b{% endif %};">
+                    <div style="padding: 15px; margin-bottom: 20px; border-radius: 6px; border-left: 4px solid {% if category == 'success' %}#28a745{% elif category == 'warning' %}#e0a800{% else %}#dc3545{% endif %}; background: {% if category == 'success' %}rgba(40, 167, 69, 0.1){% elif category == 'warning' %}rgba(224, 168, 0, 0.1){% else %}rgba(220, 53, 69, 0.1){% endif %}; color: {% if category == 'success' %}#51cf66{% elif category == 'warning' %}#ffd43b{% else %}#ff6b6b{% endif %};">
                         {{ message }}
                     </div>
                 {% endfor %}

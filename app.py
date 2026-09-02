@@ -90,6 +90,10 @@ app.register_blueprint(integraciones_bp)
 from rutas_ventas import ventas_bp
 app.register_blueprint(ventas_bp)
 
+# LISTADO DE STOCK (FASE-STOCK-S1)
+from rutas_productos import productos_bp
+app.register_blueprint(productos_bp)
+
 @app.route('/')
 def index():
     return redirect(url_for('login'))
