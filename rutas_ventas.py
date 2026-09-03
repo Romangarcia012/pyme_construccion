@@ -422,6 +422,9 @@ def listar_pedidos():
         tipo = canal.tipo if canal else None
         despacho = pedido.estado_despacho
         filas.append({
+            # El id viaja al formulario de comision: es lo que aparea cada
+            # input con su pedido, igual que el sku en el listado de costos.
+            'id': pedido.id,
             'fecha': pedido.fecha_pedido,
             'canal': ETIQUETA_CANAL.get(tipo, canal.nombre if canal else '-'),
             # El pedido online trae el nombre del comprador; la venta de
@@ -435,6 +438,9 @@ def listar_pedidos():
             'despacho': despacho,
             'despacho_etiqueta': ETIQUETA_DESPACHO.get(despacho, despacho),
             'nota': pedido.nota,
+            # Crudo, sin formatear: NULL tiene que llegar a la plantilla como
+            # None para que el input quede VACIO y no muestre un 0 inventado.
+            'comision_plataforma': pedido.comision_plataforma,
         })
 
     # Cuantas ventas estan esperando salir. Es lo unico que se cuenta arriba
@@ -442,3 +448,131 @@ def listar_pedidos():
     pendientes = sum(1 for fila in filas if fila['despacho'] == DESPACHO_NO)
 
     return render_template('pedidos_listar.html', filas=filas, pendientes=pendientes)
+
+
+# --------------------------------------------------------------------------
+# FASE-REPORTES-S3-COMISION: lo que la plataforma se queda por vender
+# --------------------------------------------------------------------------
+# La ultima pieza que falta para el margen. Tiendanube y Mercado Libre cobran
+# una comision por venta que NO viaja en el payload como linea aparte -- se
+# verifico en FASE-REPORTES-S3 -- asi que no hay nada que sincronizar: la carga
+# Roman a mano, mirando la liquidacion del canal.
+#
+# Va por PEDIDO, no por linea de producto: la comision depende de la forma de
+# venta, no del producto, y repartirla entre las lineas de un pedido inventaria
+# una precision que el dato no tiene.
+#
+# Y no hay sugerencia posible, a diferencia del costo de producto (donde
+# Tiendanube manda un `cost` parcial): el input arranca vacio y se queda vacio
+# hasta que alguien lo llene.
+
+
+class ComisionInvalida(Exception):
+    """Lo que vino en el formulario no es una comision. El mensaje se le
+    muestra a quien la estaba cargando, asi que se escribe en criollo."""
+
+
+def _etiqueta_pedido(pedido):
+    """Como nombrar un pedido en un mensaje de error.
+
+    El numero del canal es lo que Roman tiene delante cuando mira la
+    liquidacion; la venta de mostrador no tiene ninguno y cae en la fecha.
+    """
+    if pedido.numero_externo:
+        return '#%s' % pedido.numero_externo
+    if pedido.fecha_pedido:
+        return 'del %s' % pedido.fecha_pedido.strftime('%d/%m/%Y')
+    return 'id %s' % pedido.id
+
+
+def _leer_comision(texto, etiqueta):
+    """El texto del input -> Decimal con dos decimales, o None si vino vacio.
+
+    Mismo criterio que `rutas_productos._leer_costo`, y por el mismo motivo: el
+    vacio es un valor con significado, no un error. Borrar el input es como se
+    saca una comision mal cargada y se vuelve a "no la se". Guardar 0 en su
+    lugar seria afirmar que el canal no cobro nada por esa venta, y un reporte
+    de margen leeria esa afirmacion como buena.
+
+    La coma se acepta como decimal porque es lo que tipea cualquiera aca.
+    """
+    texto = (texto or '').strip().replace(',', '.')
+    if not texto:
+        return None
+    try:
+        comision = Decimal(texto)
+    except (InvalidOperation, ValueError):
+        raise ComisionInvalida('La comision del pedido %s no es un numero.' % etiqueta)
+    # NaN e Infinity pasan por Decimal() sin quejarse y romperian recien contra
+    # la base, con la transaccion ya a medias.
+    if not comision.is_finite():
+        raise ComisionInvalida('La comision del pedido %s no es un numero.' % etiqueta)
+    if comision < 0:
+        raise ComisionInvalida(
+            'La comision del pedido %s no puede ser negativa.' % etiqueta)
+    return comision.quantize(Decimal('0.01'))
+
+
+@ventas_bp.route('/comisiones', methods=['POST'])
+@login_required
+def guardar_comisiones():
+    """Guarda las comisiones de plataforma que se cargaron en el listado.
+
+    Es una sola tanda para toda la pantalla y es todo o nada, igual que los
+    costos de producto: si una fila trae basura no se guarda ninguna y el
+    formulario vuelve con el error. Guardar las buenas y descartar la mala
+    dejaria la pantalla mostrando un exito parcial que nadie pidio.
+
+    Lo que esta ruta NO toca: `pago.comision`. Esa es la mordida del PROCESADOR
+    de pagos y se llena sola desde el sync de Mercado Pago; esta es la del
+    CANAL de venta. Sobre la misma venta pueden convivir las dos.
+    """
+    # El filtro por empresa es lo unico que impide que un pedido ajeno entre
+    # por el formulario: lo que llega son cadenas que mando el cliente.
+    pedidos = {pedido.id: pedido for pedido in
+               Pedido.query.filter_by(empresa_id=current_user.empresa_id).all()}
+
+    ids = request.form.getlist('pedido_id')
+    comisiones = request.form.getlist('comision_plataforma')
+
+    try:
+        cambios = []
+        for indice, crudo in enumerate(ids):
+            try:
+                pedido_id = int((crudo or '').strip())
+            except (TypeError, ValueError):
+                continue
+            pedido = pedidos.get(pedido_id)
+            if pedido is None:
+                # Una fila que no corresponde a un pedido de la empresa se
+                # ignora en silencio en vez de voltear la tanda: el listado se
+                # arma desde el servidor, asi que esto solo pasa si algo cambio
+                # entre que se abrio la pantalla y se apreto guardar.
+                continue
+            texto = comisiones[indice] if indice < len(comisiones) else ''
+            comision = _leer_comision(texto, _etiqueta_pedido(pedido))
+            if comision != pedido.comision_plataforma:
+                cambios.append((pedido, comision))
+
+        # Recien se escribe cuando TODAS las filas pasaron la validacion: con
+        # la asignacion adentro del bucle de arriba, una fila mala mas abajo
+        # dejaria las anteriores ya modificadas en la sesion.
+        for pedido, comision in cambios:
+            pedido.comision_plataforma = comision
+        db.session.commit()
+    except ComisionInvalida as error:
+        db.session.rollback()
+        flash(str(error), 'error')
+        return redirect(url_for('ventas.listar_pedidos'))
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        flash('No se pudieron guardar las comisiones. Revisa los datos e '
+              'intenta de nuevo.', 'error')
+        return redirect(url_for('ventas.listar_pedidos'))
+
+    if cambios:
+        flash('Se actualizo la comision de %d pedido%s.'
+              % (len(cambios), '' if len(cambios) == 1 else 's'), 'success')
+    else:
+        flash('No hubo cambios que guardar.', 'warning')
+    return redirect(url_for('ventas.listar_pedidos'))

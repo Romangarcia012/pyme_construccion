@@ -332,6 +332,23 @@ class Pedido(db.Model):
     costo_envio_vendedor = db.Column(db.Numeric(14, 2))
     total_impuestos = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     total = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    # Lo que la plataforma (Tiendanube, Mercado Libre) se queda por vender.
+    # NO viene en el payload como linea aparte -- se verifico en
+    # FASE-REPORTES-S3 -- asi que la carga Roman a mano desde el listado.
+    #
+    # Va a nivel PEDIDO y no a nivel linea a proposito: la comision depende de
+    # la forma de venta, no del producto, y prorratearla entre las lineas de un
+    # mismo pedido inventaria una precision que el dato no tiene.
+    #
+    # Nullable con el mismo criterio que costo_envio_vendedor: NULL es "todavia
+    # no la cargue", CERO es "confirmado que no hubo comision" (una venta de
+    # mostrador no paga ninguna). Un reporte que los confunda va a mostrar
+    # margen de mas en cada pedido sin cargar.
+    #
+    # No confundir con pago.comision, que es la del PROCESADOR de pagos
+    # (Mercado Pago) y pertenece a otro flujo: son dos mordidas distintas
+    # sobre la misma venta y se cargan por caminos distintos.
+    comision_plataforma = db.Column(db.Numeric(14, 2))
     # Texto libre que escribe quien carga la venta a mano ("cliente Juan Perez",
     # "pago la mitad ahora"). No lo llena ningun sync: para los canales
     # externos el equivalente ya viaja en raw_payload.

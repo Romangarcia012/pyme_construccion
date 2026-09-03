@@ -131,6 +131,34 @@
         .despacho-mostrador { background: rgba(255, 255, 255, 0.06); color: #999; }
         .despacho-sin_dato { color: #555; }
 
+        .comision-input {
+            width: 110px;
+            background: #0f0f0f;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            color: #e0e0e0;
+            padding: 7px 9px;
+            font-size: 14px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            font-family: inherit;
+        }
+        .comision-input:focus { outline: none; border-color: #28a745; }
+
+        .btn-guardar {
+            background: #28a745;
+            color: #fff;
+            padding: 11px 20px;
+            border: none;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            margin-top: 15px;
+            transition: 0.3s;
+        }
+        .btn-guardar:hover { background: #20c997; }
+
         .aclaracion {
             color: #777;
             font-size: 13px;
@@ -176,6 +204,7 @@
             </p>
             {% endif %}
 
+            <form method="POST" action="{{ url_for('ventas.guardar_comisiones') }}">
             <div class="tabla-container">
                 <table>
                     <thead>
@@ -185,6 +214,7 @@
                             <th>Cliente</th>
                             <th class="num">Total</th>
                             <th>Medio de cobro</th>
+                            <th class="num">Comisi&oacute;n plataforma</th>
                             <th class="corte">Estado</th>
                             <th>Despacho</th>
                         </tr>
@@ -210,6 +240,17 @@
                                     <span class="apagado">—</span>
                                 {% endif %}
                             </td>
+                            <td class="num">
+                                {# El id viaja en el mismo orden que la comisión: la ruta
+                                   los aparea por posición, igual que el listado de costos. #}
+                                <input type="hidden" name="pedido_id" value="{{ fila.id }}">
+                                {# Sin comisión cargada el input queda VACÍO, y no hay nada
+                                   con qué sugerirla: el canal no la manda en el pedido. #}
+                                <input type="text" name="comision_plataforma" class="comision-input"
+                                       inputmode="decimal" autocomplete="off"
+                                       value="{% if fila.comision_plataforma is not none %}{{ fila.comision_plataforma }}{% endif %}"
+                                       aria-label="Comisión de plataforma del pedido del {{ fila.fecha.strftime('%d/%m/%Y') if fila.fecha else 'sin fecha' }}">
+                            </td>
                             <td class="corte"><span class="estado">{{ fila.estado }}</span></td>
                             <td>
                                 <span class="despacho despacho-{{ fila.despacho }}">{{ fila.despacho_etiqueta }}</span>
@@ -219,6 +260,9 @@
                     </tbody>
                 </table>
             </div>
+
+            <button type="submit" class="btn-guardar">Guardar comisiones</button>
+            </form>
 
         {% else %}
             <div class="tabla-container">
@@ -231,6 +275,16 @@
             así que refleja lo último que trajo el sync. <strong>Mostrador</strong> es la
             venta presencial: se entrega en el acto y no tiene despacho que seguir.
             El guion es un pedido que llegó sin información de envío.
+        </p>
+
+        <p class="aclaracion">
+            La <strong>comisión de plataforma</strong> es lo que se queda el canal por la
+            venta. No viene en el pedido y ninguna sincronización la completa: sólo existe
+            si la cargás vos, mirando la liquidación del canal. Vacío significa
+            “todavía no la sé” y <strong>no es lo mismo que cero</strong>: cero afirma que esa
+            venta no pagó comisión, como la de mostrador. Es por pedido, no por producto,
+            porque depende de la forma de venta. No se confunde con la comisión del
+            procesador de pagos, que es otra mordida y se carga por otro lado.
         </p>
     </div>
 </body>
