@@ -144,7 +144,7 @@
             <div class="menu">
                 <a href="{{ url_for('dashboard') }}">← Volver</a>
                 <form method="POST" action="{{ url_for('limpiar_historial') }}" style="display: inline;">
-                    <button type="submit" class="btn-limpiar-historial" onclick="return confirm('¿Estás seguro? Se eliminarán todos los registros del historial.')">Limpiar Historial</button>
+                    <button type="submit" class="btn-limpiar-historial" onclick="return confirm('El historial ya no se borra: queda constancia de que lo pediste. ¿Seguir?')">Dejar constancia</button>
                 </form>
             </div>
         </header>
@@ -159,16 +159,20 @@
                             <th>Acción</th>
                             <th>Tipo</th>
                             <th>Descripción</th>
+                            <th>Antes</th>
+                            <th>Después</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for h in historial %}
                             <tr>
-                                <td>{{ h.fecha.strftime('%d/%m/%Y %H:%M') }}</td>
+                                <td>{{ h.fecha | hora_local }}</td>
                                 <td><strong>{{ h.usuario.nombre if h.usuario else 'Sistema' }}</strong></td>
                                 <td><span class="accion {{ h.accion }}">{{ h.accion.upper() }}</span></td>
-                                <td>{{ h.tipo_registro }}</td>
+                                <td>{{ h.tipo }}</td>
                                 <td>{{ h.descripcion }}</td>
+                                <td>{{ h.valor_anterior if h.valor_anterior is not none else '' }}</td>
+                                <td>{{ h.valor_nuevo if h.valor_nuevo is not none else '' }}</td>
                             </tr>
                         {% endfor %}
                     </tbody>

@@ -96,14 +96,31 @@ class Ingreso(db.Model):
 class Historial(db.Model):
     __tablename__ = 'historial'
     id = db.Column(db.Integer, primary_key=True)
-    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=False)
+    # NULLABLE desde FASE-AUDITORIA-S2, por dos razones distintas:
+    #   1. Una cuenta que se elimina deja su historial atras. La fila sobrevive
+    #      al usuario con usuario_id en NULL; antes se borraba el rastro junto
+    #      con el que lo habia generado.
+    #   2. Deja lugar para las acciones del sistema (el sync pisando una
+    #      edicion hecha a mano). Esta slice todavia no las genera.
+    # Quien fue sigue siendo legible en `descripcion` aunque la FK quede NULL.
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=True)
+    # El historial es de la EMPRESA, no del usuario: sin esto, el dia que Nachi
+    # tenga login, Roman no veria nada de lo que hizo Nachi -- que es
+    # exactamente lo que esta fase existe para resolver.
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'),
+                           nullable=False, index=True)
     accion = db.Column(db.String(50), nullable=False)  # 'crear', 'editar', 'eliminar'
     tipo = db.Column(db.String(50), nullable=False)  # 'gasto', 'ingreso', 'categoria', etc
     id_registro = db.Column(db.Integer)
     descripcion = db.Column(db.String(200))
+    # Los completa el hook de auditoria.py via get_history(); las once llamadas
+    # manuales a registrar_cambio() los dejan en NULL, como venian.
+    valor_anterior = db.Column(db.Text)
+    valor_nuevo = db.Column(db.Text)
     fecha = db.Column(db.DateTime, default=datetime.utcnow)
-    
+
     usuario = db.relationship('Usuario', backref='historial')
+    empresa = db.relationship('Empresa', backref='historial')
 
 # ============================================================================
 # FASE2-S1 - Modelo de datos del ecommerce

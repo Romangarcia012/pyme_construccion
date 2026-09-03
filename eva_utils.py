@@ -1,17 +1,18 @@
-from models import db, Historial
-from datetime import datetime
-
-def registrar_cambio(usuario_id, tipo_accion, tipo_registro, registro_id, descripcion):
-    """Registra un cambio en el historial"""
-    historial = Historial(
-        usuario_id=usuario_id,
-        tipo_accion=tipo_accion,
-        tipo_registro=tipo_registro,
-        registro_id=registro_id,
-        descripcion=descripcion
-    )
-    db.session.add(historial)
-    db.session.commit()
+# FASE-AUDITORIA-S2: aca vivia un `registrar_cambio()` que era una bomba de
+# tiempo. Usaba los kwargs `tipo_accion`, `tipo_registro` y `registro_id`, y
+# NINGUNO de los tres existe como columna en Historial (son `accion`, `tipo` e
+# `id_registro`): cualquier llamada tiraba TypeError.
+#
+# No explotaba nunca porque el unico modulo que la importaba, app.py, define
+# mas abajo su propia version -- con los nombres correctos -- que pisa al
+# import. O sea que funcionaba por el orden de las lineas, no por diseno. El
+# dia que otro modulo hiciera `from eva_utils import registrar_cambio` para
+# auditar una pantalla nueva, se llevaba la rota.
+#
+# Se borro en vez de corregirse: una segunda copia correcta invita igual a
+# llamarla desde el lugar equivocado. La version buena esta en app.py:723 para
+# las cuatro entidades que ya audita a mano, y el hook de auditoria.py cubre
+# el resto sin que nadie tenga que llamar nada.
 
 def calcular_eva(ingresos_totales, gastos_totales, config):
     """Calcula el EVA"""

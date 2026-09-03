@@ -2,8 +2,11 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from flask_login import LoginManager, login_required, current_user, login_user, logout_user
 from flask_migrate import Migrate
 from models import db, Usuario, Categoria, Gasto, Ingreso, Empresa, Historial
-from eva_utils import registrar_cambio, generar_analisis_completo
-from datetime import datetime
+# `registrar_cambio` YA NO se importa de aca: la version de eva_utils usaba
+# nombres de columna que no existen y nunca fallo solo porque el `def` de
+# app.py:723 la pisaba. Se borro alla; la unica que queda es la de mas abajo.
+from eva_utils import generar_analisis_completo
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from flask_mail import Mail, Message
 from functools import wraps
@@ -97,6 +100,30 @@ app.register_blueprint(productos_bp)
 # MARGEN POR PRODUCTO Y CANAL (FASE-REPORTES-S3-MARGEN)
 from rutas_reportes import reportes_bp
 app.register_blueprint(reportes_bp)
+
+# QUIEN HIZO QUE (FASE-AUDITORIA-S2)
+# Se instala despues de los blueprints y no antes: el listener cuelga de
+# db.session, no de las rutas, asi que cubre cualquier escritura de las tablas
+# de su lista blanca venga de donde venga -- incluidas las que se agreguen
+# manana sin que nadie se acuerde de auditarlas.
+import auditoria
+auditoria.instalar()
+
+
+# El historial guarda `fecha` en UTC naive (datetime.utcnow, desde el dia uno).
+# No se toca como se guarda -- reescribir las filas viejas seria inventar una
+# hora que nadie registro -- se corrige al mostrarla. Argentina es UTC-3 todo
+# el ano: no hay horario de verano desde 2009, asi que un offset fijo alcanza y
+# evita meter una dependencia de zonas horarias.
+HORAS_ARGENTINA = timedelta(hours=-3)
+
+
+@app.template_filter('hora_local')
+def hora_local(momento):
+    """UTC naive -> hora de Argentina, lista para imprimir."""
+    if momento is None:
+        return ''
+    return (momento + HORAS_ARGENTINA).strftime('%d/%m/%Y %H:%M')
 
 @app.route('/')
 def index():
@@ -706,23 +733,52 @@ def config_eva():
 @app.route('/historial')
 @login_required
 def ver_historial():
-    # FILTRAR POR USUARIO
-    historial = Historial.query.filter_by(usuario_id=current_user.id).order_by(Historial.fecha.desc()).all()
+    # FILTRAR POR EMPRESA, no por usuario (FASE-AUDITORIA-S2).
+    #
+    # Filtraba por `usuario_id=current_user.id`, o sea que cada uno veia solo
+    # lo suyo. Con un solo usuario daba igual; el dia que Nachi tenga login,
+    # Roman no veria una sola de sus acciones -- justo lo contrario de lo que
+    # la pantalla existe para mostrar.
+    #
+    # Por empresa tambien entran las filas de las cuentas ya eliminadas
+    # (usuario_id en NULL): son las que mas importa no perder.
+    historial = (Historial.query
+                 .filter_by(empresa_id=current_user.empresa_id)
+                 .order_by(Historial.fecha.desc())
+                 .all())
     return render_template('historial.html', historial=historial, usuario=current_user)
 
 @app.route('/historial/limpiar', methods=['POST'])
 @login_required
 def limpiar_historial():
-    # Limpiar solo el historial del usuario
-    Historial.query.filter_by(usuario_id=current_user.id).delete()
-    db.session.commit()
-    
-    flash('✅ Historial limpiado', 'success')
+    # YA NO BORRA NADA (FASE-AUDITORIA-S2).
+    #
+    # Antes hacia `.delete()` sobre el historial propio: un registro que el
+    # auditado puede borrar de un boton no audita nada. Ahora la ruta deja
+    # constancia de que alguien quiso limpiarlo y sigue de largo.
+    #
+    # La fila se escribe con `registrar_cambio`, la misma de siempre. El hook
+    # de auditoria.py no la cubre: Historial no esta -- ni puede estar -- en su
+    # lista blanca, porque auditarse a si misma seria recursion infinita.
+    registrar_cambio(current_user.id, 'eliminar', 'historial', None,
+                     'Se pidio limpiar el historial (no se borro ninguna fila)')
+
+    flash('El historial ya no se borra: queda constancia de quién lo pidió y cuándo.',
+          'warning')
     return redirect(url_for('ver_historial'))
 
 def registrar_cambio(usuario_id, accion, tipo, id_registro, descripcion):
+    """Escritura manual de historial. La usan las cuatro entidades viejas
+    (gasto, ingreso, categoria, configuracion); el resto lo cubre el hook de
+    auditoria.py sin que nadie tenga que llamar nada.
+
+    `empresa_id` se deriva del usuario: es NOT NULL y ninguno de los once call
+    sites lo pasa, y no se tocan.
+    """
+    usuario = Usuario.query.get(usuario_id)
     cambio = Historial(
         usuario_id=usuario_id,
+        empresa_id=usuario.empresa_id if usuario else None,
         accion=accion,
         tipo=tipo,
         id_registro=id_registro,
@@ -1037,20 +1093,32 @@ def eliminar_cuenta():
             
             # Eliminar categorias
             Categoria.query.filter_by(usuario_id=usuario_id).delete()
-            
-            # Eliminar historial
-            Historial.query.filter_by(usuario_id=usuario_id).delete()
-            
+
+            # EL HISTORIAL YA NO SE BORRA ACA (FASE-AUDITORIA-S2).
+            #
+            # Estaba `Historial.query.filter_by(usuario_id=...).delete()`: la
+            # accion mas destructiva del sistema era tambien la que limpiaba su
+            # propia evidencia. Ahora las filas quedan, con usuario_id en NULL
+            # (por eso la columna paso a nullable) y el empresa_id intacto, asi
+            # que los que siguen en la empresa ven lo que hizo el que se fue.
+            #
+            # SQLAlchemy las anula solo, por el backref 'historial'.
+
             # Eliminar usuario
             db.session.delete(current_user)
-            
+
             # Eliminar empresa si no tiene otros usuarios
             empresa = Empresa.query.get(empresa_id)
             if empresa and Empresa.query.filter_by(id=empresa_id).first():
                 otros_usuarios = Usuario.query.filter_by(empresa_id=empresa_id).count()
                 if otros_usuarios == 0:
+                    # Se va la empresa entera: no queda nadie a quien mostrarle
+                    # este historial, y `empresa_id` es NOT NULL, asi que
+                    # dejarlo huerfano volteria el borrado con un error de FK.
+                    # Este es el unico caso en que el rastro se va.
+                    Historial.query.filter_by(empresa_id=empresa_id).delete()
                     db.session.delete(empresa)
-            
+
             db.session.commit()
             
             logout_user()
