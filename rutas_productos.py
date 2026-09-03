@@ -1,25 +1,34 @@
 # -*- coding: utf-8 -*-
-"""Pantallas de producto: listado de stock (FASE-STOCK-S1) y resumen de
-vendido por canal y color (FASE-REPORTES-S1).
+"""Pantallas de producto: listado de stock (FASE-STOCK-S1), carga del costo
+(FASE-REPORTES-S3-COSTO) y resumen de vendido por canal y color
+(FASE-REPORTES-S1).
 
-Las dos son de solo lectura. Hasta ahora `producto.stock` solo se veia entrando a Supabase:
-lo escribia el resync de Tiendanube (FASE3-S3) y desde esta slice tambien lo
-descuenta la venta presencial (`rutas_ventas.py`), pero no habia pantalla.
+Hasta ahora `producto.stock` solo se veia entrando a Supabase: lo escribia el
+resync de Tiendanube (FASE3-S3) y tambien lo descuenta la venta presencial
+(`rutas_ventas.py`), pero no habia pantalla.
 
-Lo que NO hace y es a proposito: no se puede editar el stock desde aca. La
-fuente de verdad sigue siendo Tiendanube y cada resync pisa el numero, asi que
-una edicion manual duraria hasta la proxima corrida y seria mentira mientras
-tanto. Tampoco hay alertas de stock bajo.
+Lo que NO se puede editar desde aca, y es a proposito: el stock. La fuente de
+verdad sigue siendo Tiendanube y cada resync pisa el numero, asi que una
+edicion manual duraria hasta la proxima corrida y seria mentira mientras tanto.
+Tampoco hay alertas de stock bajo.
+
+Lo que SI se edita, desde FASE-REPORTES-S3-COSTO, es `costo_unitario`. Es el
+caso opuesto al del stock: Tiendanube no lo sabe y ningun sync lo pisa (ver
+`ingestor_tiendanube._normalizar_producto`, que lo deja NULL siempre), asi que
+el unico modo de que exista es que alguien lo escriba. Sin el, el margen de
+cada venta es NULL y no hay reporte de rentabilidad posible.
 
 El blueprint se registra en app.py; ninguna ruta existente se toca.
 """
 
 from collections import OrderedDict
+from decimal import Decimal, InvalidOperation
 
-from flask import Blueprint, render_template
+from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from sqlalchemy import func
 
+from ingestor_tiendanube import a_decimal
 from models import (
     CanalVenta,
     MapeoProductoCanal,
@@ -73,16 +82,96 @@ def _canales_por_producto(empresa_id):
     return por_producto
 
 
+# --------------------------------------------------------------------------
+# FASE-REPORTES-S3-COSTO: la sugerencia de Tiendanube
+# --------------------------------------------------------------------------
+# Tiendanube manda un `cost` por linea dentro del payload de detalle de cada
+# pedido (products[].cost). Ya esta guardado en `pedido.raw_payload` desde
+# FASE-REPORTES-S3-FIX2: no hace falta llamar al catalogo ni pedir ningun scope
+# nuevo, alcanza con leer lo que la base ya tiene.
+#
+# Ese numero NO es el costo real y por eso solo se muestra, nunca se guarda ni
+# autocompleta. Verificado contra el Tarjetero Negro: Tiendanube dice 3230.81 y
+# el costo de verdad que Roman tiene anotado es 3994.18. La diferencia es que
+# el `cost` del panel de Tiendanube cubre compra + flete y se queda sin los
+# impuestos ni el empaque. Sirve de piso y de recordatorio; el numero lo pone
+# Roman.
+
+# Cuantos pedidos se leen hacia atras para armar la sugerencia. Cada uno trae
+# su raw_payload entero, que es un JSON grande, y esto es una ayuda visual: no
+# justifica arrastrar el historico completo a memoria en cada carga de la
+# pantalla. Un producto que no se vendio en los ultimos 200 pedidos queda sin
+# sugerencia, que es exactamente lo que corresponde -- del cost de hace un anio
+# no hay nada que sugerir.
+LIMITE_PEDIDOS_SUGERENCIA = 200
+
+
+def _costo_sugerido_por_producto(empresa_id):
+    """producto_id -> el `cost` mas reciente que mando el canal, o {}.
+
+    Se cruza por el par (id externo del producto, id externo de la variante)
+    contra MapeoProductoCanal, que es la misma identidad que usa el sync. El
+    canal sale del pedido, no del payload: el mapeo es unico por canal y dos
+    canales podrian repetir un id externo.
+
+    Los pedidos se recorren del mas nuevo al mas viejo y gana el primero que
+    aparece: el costo de una variante cambia con el tiempo y el ultimo es el
+    unico que describe hoy.
+    """
+    mapeos = {}
+    for mapeo in (MapeoProductoCanal.query
+                  .join(CanalVenta, CanalVenta.id == MapeoProductoCanal.canal_id)
+                  .filter(CanalVenta.empresa_id == empresa_id)
+                  .all()):
+        clave = (mapeo.canal_id, mapeo.id_producto_externo,
+                 mapeo.id_variante_externo or '')
+        mapeos[clave] = mapeo.producto_id
+
+    if not mapeos:
+        return {}
+
+    pedidos = (Pedido.query
+               .filter_by(empresa_id=empresa_id)
+               .order_by(Pedido.fecha_pedido.desc(), Pedido.id.desc())
+               .limit(LIMITE_PEDIDOS_SUGERENCIA)
+               .all())
+
+    sugeridos = {}
+    for pedido in pedidos:
+        payload = pedido.raw_payload
+        if not isinstance(payload, dict):
+            continue
+        for linea in (payload.get('products') or []):
+            if not isinstance(linea, dict):
+                continue
+            clave = (pedido.canal_id,
+                     str(linea.get('product_id') or ''),
+                     str(linea.get('variant_id') or ''))
+            producto_id = mapeos.get(clave)
+            # El `in` es lo que hace que gane el pedido mas nuevo: ya recorrido
+            # de nuevo a viejo, el primero que escribe es el que queda.
+            if producto_id is None or producto_id in sugeridos:
+                continue
+            # por_defecto=None: una linea sin `cost` (o con basura) no deja
+            # sugerencia, en vez de sugerir un costo de cero.
+            costo = a_decimal(linea.get('cost'), por_defecto=None)
+            if costo is not None:
+                sugeridos[producto_id] = costo
+
+    return sugeridos
+
+
 @productos_bp.route('/listar')
 @login_required
 def listar_stock():
-    """Que hay y cuanto queda, por producto."""
+    """Que hay, cuanto queda y cuanto cuesta, por producto."""
     productos = (Producto.query
                  .filter_by(empresa_id=current_user.empresa_id)
                  .order_by(Producto.nombre, Producto.sku)
                  .all())
 
     canales = _canales_por_producto(current_user.empresa_id)
+    sugeridos = _costo_sugerido_por_producto(current_user.empresa_id)
 
     filas = []
     for producto in productos:
@@ -93,11 +182,114 @@ def listar_stock():
             # "este producto no lleva control de stock", 0 es "no queda
             # ninguno". La vista pasa el None crudo y decide alla.
             'stock': producto.stock,
+            # El costo cargado va crudo al input: NULL es un input vacio, y el
+            # vacio NO se rellena con la sugerencia de Tiendanube. Que quede
+            # vacio es lo que distingue "todavia no lo cargue" de "vale esto".
+            'costo_unitario': producto.costo_unitario,
+            'costo_tn': sugeridos.get(producto.id),
             'canales': ', '.join(canales.get(producto.id, [])),
             'activo': producto.activo,
         })
 
     return render_template('productos_listar.html', filas=filas)
+
+
+class CostoInvalido(Exception):
+    """Lo que vino en el formulario no es un costo. El mensaje se le muestra a
+    quien lo estaba cargando, asi que se escribe en criollo."""
+
+
+def _leer_costo(texto, nombre):
+    """El texto del input -> Decimal con dos decimales, o None si vino vacio.
+
+    El vacio es un valor con significado, no un error: borrar el input es como
+    se saca un costo mal cargado y se vuelve a "no lo se". Guardar 0 en su
+    lugar seria afirmar que el producto es gratis, y ese cero se congelaria en
+    el snapshot de cada venta que venga despues.
+
+    La coma se acepta como decimal porque es lo que tipea cualquiera aca; es el
+    mismo criterio que usa `rutas_ventas._leer_precio`.
+    """
+    texto = (texto or '').strip().replace(',', '.')
+    if not texto:
+        return None
+    try:
+        costo = Decimal(texto)
+    except (InvalidOperation, ValueError):
+        raise CostoInvalido('El costo de "%s" no es un numero.' % nombre)
+    # NaN e Infinity pasan por Decimal() sin quejarse y romperian recien contra
+    # la base, con la transaccion ya a medias.
+    if not costo.is_finite():
+        raise CostoInvalido('El costo de "%s" no es un numero.' % nombre)
+    if costo < 0:
+        raise CostoInvalido('El costo de "%s" no puede ser negativo.' % nombre)
+    return costo.quantize(Decimal('0.01'))
+
+
+@productos_bp.route('/costos', methods=['POST'])
+@login_required
+def guardar_costos():
+    """Guarda el costo unitario que se cargo a mano en el listado.
+
+    Es una sola tanda para toda la pantalla: Roman abre el listado, completa
+    los que sabe y aprieta una vez. Por eso tambien es todo o nada -- si una
+    fila trae basura no se guarda ninguna y el formulario vuelve con el error.
+    Guardar las buenas y descartar la mala dejaria la pantalla mostrando un
+    exito parcial que nadie pidio.
+
+    Lo que esta ruta NO toca: `pedido_item.costo_unitario_snapshot`. El costo
+    que se guarda aca rige de aca en adelante -- lo congela cada venta nueva al
+    momento de ocurrir (sync_tiendanube y rutas_ventas ya lo hacen). Las ventas
+    ya guardadas con el snapshot en NULL se quedan asi: reescribirlas seria
+    inventar que ese costo regia cuando se vendieron, que es justamente lo que
+    el snapshot existe para evitar.
+    """
+    # El filtro por empresa es lo unico que impide que un SKU ajeno entre por
+    # el formulario: lo que llega son cadenas que mando el cliente.
+    productos = {producto.sku: producto for producto in
+                 Producto.query.filter_by(empresa_id=current_user.empresa_id).all()}
+
+    skus = request.form.getlist('sku')
+    costos = request.form.getlist('costo_unitario')
+
+    try:
+        cambios = []
+        for indice, sku in enumerate(skus):
+            sku = (sku or '').strip()
+            producto = productos.get(sku)
+            if producto is None:
+                # Una fila que no corresponde a un producto de la empresa se
+                # ignora en silencio en vez de voltear la tanda: el listado se
+                # arma desde el servidor, asi que esto solo pasa si el catalogo
+                # cambio entre que se abrio la pantalla y se apreto guardar.
+                continue
+            texto = costos[indice] if indice < len(costos) else ''
+            costo = _leer_costo(texto, producto.nombre)
+            if costo != producto.costo_unitario:
+                cambios.append((producto, costo))
+
+        # Recien se escribe cuando TODAS las filas pasaron la validacion: con
+        # la asignacion adentro del bucle de arriba, una fila mala mas abajo
+        # dejaria las anteriores ya modificadas en la sesion.
+        for producto, costo in cambios:
+            producto.costo_unitario = costo
+        db.session.commit()
+    except CostoInvalido as error:
+        db.session.rollback()
+        flash(str(error), 'error')
+        return redirect(url_for('productos.listar_stock'))
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        flash('No se pudieron guardar los costos. Revisa los datos e intenta de nuevo.',
+              'error')
+        return redirect(url_for('productos.listar_stock'))
+
+    if cambios:
+        flash('Se actualizo el costo de %d producto%s.'
+              % (len(cambios), '' if len(cambios) == 1 else 's'), 'success')
+    else:
+        flash('No hubo cambios que guardar.', 'warning')
+    return redirect(url_for('productos.listar_stock'))
 
 
 # --------------------------------------------------------------------------
