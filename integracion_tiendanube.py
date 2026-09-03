@@ -387,6 +387,11 @@ def paginar(ruta, access_token, params=None):
     )
 
 
+# Pide que cada pedido venga con sus fulfillment orders enteros en vez de solo
+# los ids. Es lo unico que trae el costo de envio (shipping.consumer_cost).
+AGREGADO_FULFILLMENT = 'fulfillment_orders'
+
+
 def traer_productos(store_id, access_token):
     """Catalogo completo. Cada item trae su array `variants` adentro."""
     return paginar('%s/products' % store_id, access_token)
@@ -399,8 +404,15 @@ def traer_pedidos(store_id, access_token, desde=None, hasta=None):
     volumen (menos de 500 pedidos/mes) son unas pocas paginas. Filtrar por
     fecha es una optimizacion, no un requisito de correctitud: el upsert
     aguanta traer lo mismo dos veces.
+
+    `aggregates=fulfillment_orders` no es opcional: sin el, `fulfillments`
+    vuelve resumido y el costo de envio no viene en ningun lado del pedido.
+    Tiendanube saco las propiedades de envio del recurso Order el 2025/04/24
+    ("Removed deprecated shipping properties from the Order resource in favor
+    of Fulfillment Order properties") y el monto quedo adentro de cada
+    fulfillment order. Ver AGREGADO_FULFILLMENT.
     """
-    params = {}
+    params = {'aggregates': AGREGADO_FULFILLMENT}
     if desde is not None:
         params['updated_at_min'] = desde.strftime('%Y-%m-%dT%H:%M:%S+00:00')
     if hasta is not None:

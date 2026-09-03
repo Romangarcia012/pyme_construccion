@@ -153,6 +153,45 @@ def _cortar(texto, largo):
     return str(texto)[:largo]
 
 
+def envio_del_cliente(crudo):
+    """Lo que el comprador pago de envio, o None si Tiendanube no lo mando.
+
+    El 2025/04/24 Tiendanube saco las propiedades de envio del recurso Order
+    ("Removed deprecated shipping properties from the Order resource in favor
+    of Fulfillment Order properties"). `shipping_cost_customer` ya no viene en
+    los pedidos de una tienda migrada a multi-inventario: el monto vive ahora
+    en cada fulfillment order, en shipping.consumer_cost.value.
+
+    Un pedido puede partirse en varios despachos y cada uno cobra su envio, asi
+    que los fulfillments se SUMAN. El campo viejo queda de respaldo para los
+    payloads guardados antes del cambio.
+
+    Devuelve None -no CERO- cuando el dato no esta en ningun formato conocido.
+    None es "Tiendanube no lo mando"; CERO es "el envio salio gratis" (la doc
+    del campo viejo dice textual que 0 es free shipping). Confundirlos hace que
+    un pedido con envio caro parezca uno con envio bonificado.
+    """
+    total = CERO
+    hubo_dato = False
+    for fulfillment in (crudo.get('fulfillments') or []):
+        # Sin ?aggregates=fulfillment_orders la API manda solo los ids (strings
+        # sueltos): no hay nada que leer y se cae al campo viejo.
+        if not isinstance(fulfillment, dict):
+            continue
+        envio = fulfillment.get('shipping')
+        if not isinstance(envio, dict):
+            continue
+        costo = envio.get('consumer_cost')
+        if not isinstance(costo, dict) or costo.get('value') is None:
+            continue
+        total += a_decimal(costo.get('value'))
+        hubo_dato = True
+
+    if hubo_dato:
+        return total
+    return a_decimal(crudo.get('shipping_cost_customer'), por_defecto=None)
+
+
 class IngestorTiendanube(IngestorCanal):
     """Lee la tienda de Tiendanube que representa una fila de canal_venta."""
 
@@ -284,7 +323,14 @@ class IngestorTiendanube(IngestorCanal):
         cliente = crudo.get('customer') or {}
 
         subtotal = a_decimal(crudo.get('subtotal'))
-        envio = a_decimal(crudo.get('shipping_cost_customer'))
+        envio = envio_del_cliente(crudo)
+        if envio is None:
+            # Tiendanube no mando el costo de envio en ningun formato conocido.
+            # `pedido.total_envio` es NOT NULL, asi que el 0 es lo unico que se
+            # puede guardar, pero significa "no disponible", NO "envio gratis":
+            # cuando pasa, subtotal - descuentos + envio no llega al `total` del
+            # pedido y esa diferencia es el envio que falta.
+            envio = CERO
         descuentos = a_decimal(crudo.get('discount'))
         # La tienda argentina factura con IVA incluido y la API no manda un
         # campo de impuestos en el pedido. Si algun dia lo manda, entra aca
