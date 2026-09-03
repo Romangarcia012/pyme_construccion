@@ -251,6 +251,15 @@ def _armar_venta(canal, items, fecha, medio, nota):
         total_bruto=total,
         total_descuentos=Decimal('0.00'),
         total_envio=Decimal('0.00'),
+        # El envio es CERO de verdad, no un dato que falte: la venta de
+        # mostrador se entrega en persona, no hay flete que pagar ni que
+        # cobrar. Por eso van los dos montos en 0.00 y no en NULL --
+        # `costo_envio_vendedor` es nullable justamente para poder decir "no
+        # se sabe" cuando el payload de un canal no trae el dato, y aca se
+        # sabe. Dejarlo en NULL sacaba a toda venta presencial del reporte de
+        # margen (FASE-REPORTES-S3-MARGEN), que exige los tres componentes de
+        # costo cargados y no tiene por que adivinar este.
+        costo_envio_vendedor=Decimal('0.00'),
         total_impuestos=Decimal('0.00'),
         total=total,
         nota=nota or None,
