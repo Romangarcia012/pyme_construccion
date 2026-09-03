@@ -336,7 +336,7 @@ def _partir_nombre(nombre):
     return nombre, None
 
 
-def _clave_de_grupo(producto, mapeos_por_producto):
+def _clave_de_grupo(producto, mapeos_por_producto, con_canal=True):
     """Que variantes van juntas bajo un mismo encabezado.
 
     Dos colores del mismo producto son dos filas distintas de `producto`
@@ -345,11 +345,19 @@ def _clave_de_grupo(producto, mapeos_por_producto):
     difieren.
 
     Un producto sin mapeo (nunca vino de un canal) es su propio grupo.
+
+    `con_canal=False` lo usa el reporte de margen (FASE-REPORTES-S3-MARGEN):
+    ahi el canal no parte el grupo, porque un producto es una fila sola sin
+    importar por donde se vendio. Aca si parte, y a proposito: en esta
+    pantalla el canal es una columna, y dos productos padre distintos de dos
+    canales distintos pueden repetir el id externo sin tener nada que ver.
     """
     mapeos = mapeos_por_producto.get(producto.id)
     if mapeos:
         primero = mapeos[0]
-        return ('externo', primero.canal_id, primero.id_producto_externo)
+        if con_canal:
+            return ('externo', primero.canal_id, primero.id_producto_externo)
+        return ('externo', primero.id_producto_externo)
     return ('producto', producto.id)
 
 

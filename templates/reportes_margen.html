@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Margen por producto y canal</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container { max-width: 1100px; margin: 0 auto; }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        h1 { color: #fff; font-size: 28px; }
+        .subtitulo { color: #888; font-size: 14px; margin-top: 6px; }
+
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn-volver:hover { background: #555; }
+
+        .grupo { margin-bottom: 30px; }
+
+        h2 {
+            color: #fff;
+            font-size: 18px;
+            margin-bottom: 4px;
+        }
+
+        .bajada {
+            color: #888;
+            font-size: 13px;
+            margin-bottom: 12px;
+            line-height: 1.5;
+        }
+
+        .tabla-container {
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            overflow-x: auto;
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+
+        th {
+            background: #252525;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #fff;
+            border-bottom: 1px solid #333;
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #333;
+            vertical-align: middle;
+        }
+
+        tr:last-child td { border-bottom: none; }
+
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        th.num { text-align: right; }
+
+        /* La separacion entre lo que entro y lo que quedo. Sin ella las dos
+           mitades de la tabla se leen como una sola fila de numeros. */
+        .corte { border-left: 1px solid #333; }
+
+        /* Las tres columnas del reporte: son la respuesta, no el dato de
+           entrada, y tienen que saltar por encima del resto. */
+        .respuesta { color: #fff; font-weight: 600; }
+        .negativo { color: #e57373; }
+
+        .detalle { color: #777; font-size: 12px; }
+        .vacio { color: #888; padding: 30px; text-align: center; }
+
+        /* Lo que no se pudo calcular. Amarillo y no rojo: no esta roto, le
+           falta un dato que alguien tiene que cargar. */
+        .aviso {
+            color: #d6a441;
+            font-size: 12px;
+        }
+        .marca { color: #d6a441; }
+
+        .aclaracion {
+            color: #777;
+            font-size: 13px;
+            margin-top: 15px;
+            line-height: 1.5;
+        }
+
+        .aclaracion a, .aviso a { color: #7aa7d6; }
+
+        @media (max-width: 768px) {
+            table { font-size: 14px; }
+            th, td { padding: 10px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('dashboard') }}" class="btn-volver">← Volver al Dashboard</a>
+
+        <div class="header">
+            <div>
+                <h1>Margen por producto y canal</h1>
+                <p class="subtitulo">
+                    Cuánto entró, cuánto costó y cuánto quedó. Sobre {{ total_pedidos }}
+                    pedido{{ '' if total_pedidos == 1 else 's' }} (los cancelados no cuentan).
+                </p>
+            </div>
+        </div>
+
+        {% macro columnas_margen(fila) %}
+            <td class="num corte respuesta {% if fila.ganancia < 0 %}negativo{% endif %}">
+                {{ '%.2f'|format(fila.ganancia) }}
+            </td>
+            <td class="num respuesta {% if fila.margen_pct is not none and fila.margen_pct < 0 %}negativo{% endif %}">
+                {% if fila.margen_pct is none %}—{% else %}{{ '%.1f'|format(fila.margen_pct) }} %{% endif %}
+            </td>
+            <td class="num respuesta {% if fila.margen_mercaderia_pct is not none and fila.margen_mercaderia_pct < 0 %}negativo{% endif %}">
+                {% if fila.margen_mercaderia_pct is none %}—{% else %}{{ '%.1f'|format(fila.margen_mercaderia_pct) }} %{% endif %}
+            </td>
+        {% endmacro %}
+
+        {% macro contador(grupo) %}
+            {% if grupo.incompletos %}
+                <span class="aviso">⚠ {{ grupo.incompletos }} de {{ grupo.pedidos_totales }}
+                pedido{{ '' if grupo.pedidos_totales == 1 else 's' }} sin datos, fuera de esta cuenta</span>
+            {% endif %}
+            {% if grupo.descuadres %}
+                <span class="aviso">⚠ {{ grupo.descuadres }} sin cuadrar contra el total del canal</span>
+            {% endif %}
+        {% endmacro %}
+
+        <!-- POR PRODUCTO -->
+        <div class="grupo">
+            <h2>Por producto</h2>
+            <p class="bajada">
+                Solo los pedidos de un único producto: en uno de varios no se sabe
+                qué parte de la comisión y del envío le toca a cada uno.
+            </p>
+            <div class="tabla-container">
+                {% if productos %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Producto</th>
+                            <th class="num">Unid.</th>
+                            <th class="num">Ingreso neto</th>
+                            <th class="num">Costo total</th>
+                            <th class="num corte">Ganancia $</th>
+                            <th class="num">Margen %</th>
+                            <th class="num">Margen s/mercadería %</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for fila in productos %}
+                        <tr>
+                            <td>
+                                {{ fila.nombre }}
+                                {% if fila.pedidos %}
+                                    <br><span class="detalle">{{ fila.pedidos }}
+                                    pedido{{ '' if fila.pedidos == 1 else 's' }}</span>
+                                {% endif %}
+                                {% if fila.incompletos or fila.descuadres %}
+                                    <br>{{ contador(fila) }}
+                                {% endif %}
+                            </td>
+                            {% if fila.pedidos %}
+                                <td class="num">{{ fila.unidades }}</td>
+                                <td class="num">{{ '%.2f'|format(fila.ingreso_neto) }}</td>
+                                <td class="num">{{ '%.2f'|format(fila.costo_total) }}</td>
+                                {{ columnas_margen(fila) }}
+                            {% else %}
+                                <td class="num">—</td>
+                                <td class="num">—</td>
+                                <td class="num">—</td>
+                                <td class="num corte aviso" colspan="3">⚠ Sin margen: falta cargar datos</td>
+                            {% endif %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="vacio">Todavía no hay ventas de un solo producto.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- POR CANAL -->
+        <div class="grupo">
+            <h2>Por canal</h2>
+            <p class="bajada">
+                Acá sí entran los pedidos de varios productos: la unidad es el pedido
+                y no hay nada que repartir. El porcentaje sale de los totales del canal,
+                no de promediar los de cada venta.
+            </p>
+            <div class="tabla-container">
+                {% if canales %}
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Canal</th>
+                            <th class="num">Pedidos</th>
+                            <th class="num">Ingreso neto</th>
+                            <th class="num">Costo total</th>
+                            <th class="num corte">Ganancia $</th>
+                            <th class="num">Margen %</th>
+                            <th class="num">Margen s/mercadería %</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for fila in canales %}
+                        <tr>
+                            <td>
+                                {{ fila.nombre }}
+                                {% if fila.incompletos or fila.descuadres %}
+                                    <br>{{ contador(fila) }}
+                                {% endif %}
+                            </td>
+                            {% if fila.pedidos %}
+                                <td class="num">{{ fila.pedidos }}</td>
+                                <td class="num">{{ '%.2f'|format(fila.ingreso_neto) }}</td>
+                                <td class="num">{{ '%.2f'|format(fila.costo_total) }}</td>
+                                {{ columnas_margen(fila) }}
+                            {% else %}
+                                <td class="num">0</td>
+                                <td class="num">—</td>
+                                <td class="num">—</td>
+                                <td class="num corte aviso" colspan="3">⚠ Sin margen: falta cargar datos</td>
+                            {% endif %}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="vacio">Todavía no hay ventas.</p>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- PEDIDOS DE VARIOS PRODUCTOS -->
+        {% if multilinea %}
+        <div class="grupo">
+            <h2>Pedidos con varios productos</h2>
+            <p class="bajada">
+                No se descomponen por producto y por eso van acá, enteros. La comisión
+                y el envío son del pedido: repartirlos entre las líneas inventaría una
+                precisión que el dato no tiene.
+            </p>
+            <div class="tabla-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Pedido</th>
+                            <th>Productos</th>
+                            <th class="num">Ingreso neto</th>
+                            <th class="num">Costo total</th>
+                            <th class="num corte">Ganancia $</th>
+                            <th class="num">Margen %</th>
+                            <th class="num">Margen s/mercadería %</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for fila in multilinea %}
+                        <tr>
+                            <td>
+                                {{ fila.etiqueta }}
+                                {% if not fila.cierra %}<span class="marca"> ⚠</span>{% endif %}
+                                <br><span class="detalle">{{ fila.canal }}
+                                {% if fila.fecha %}· {{ fila.fecha.strftime('%d/%m/%Y') }}{% endif %}</span>
+                            </td>
+                            <td><span class="detalle">{{ fila.productos }}</span></td>
+                            <td class="num">{{ '%.2f'|format(fila.ingreso_neto) }}</td>
+                            <td class="num">{{ '%.2f'|format(fila.costo_total) }}</td>
+                            {{ columnas_margen(fila) }}
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- LOS QUE NO SE PUDIERON CALCULAR -->
+        {% if incompletos %}
+        <div class="grupo">
+            <h2>⚠ Sin margen: {{ incompletos|length }}
+                pedido{{ '' if incompletos|length == 1 else 's' }} sin datos</h2>
+            <p class="bajada">
+                No entran en ninguna suma de arriba. Un margen calculado sobre un costo
+                que nadie cargó sale inflado y no hay forma de darse cuenta mirándolo,
+                así que en vez de estimarlo se muestra qué falta.
+            </p>
+            <div class="tabla-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Pedido</th>
+                            <th class="num">Total</th>
+                            <th>Falta cargar</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for fila in incompletos %}
+                        <tr>
+                            <td>
+                                {{ fila.etiqueta }}
+                                <br><span class="detalle">{{ fila.canal }}
+                                {% if fila.fecha %}· {{ fila.fecha.strftime('%d/%m/%Y') }}{% endif %}</span>
+                            </td>
+                            <td class="num">{{ '%.2f'|format(fila.total or 0) }}</td>
+                            <td>
+                                {% for falta in fila.faltan %}
+                                    <div class="aviso">
+                                        {{ falta.que }}{% if falta.url %} —
+                                        <a href="{{ falta.url }}">{{ falta.donde }}</a>
+                                        {% elif falta.donde %} — {{ falta.donde }}{% endif %}
+                                    </div>
+                                {% endfor %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- LOS QUE NO CIERRAN CONTRA SU PROPIO TOTAL -->
+        {% if descuadres %}
+        <div class="grupo">
+            <h2>⚠ Pedidos que no cuadran</h2>
+            <p class="bajada">
+                El ingreso reconstruido (bruto − descuentos + envío) no da el total que
+                el pedido tiene guardado. Sí están contados arriba: el aviso es sobre el
+                dato de origen, no sobre la cuenta.
+            </p>
+            <div class="tabla-container">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Pedido</th>
+                            <th class="num">Ingreso neto</th>
+                            <th class="num">Total del pedido</th>
+                            <th class="num">Diferencia</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for fila in descuadres %}
+                        <tr>
+                            <td>
+                                {{ fila.etiqueta }}
+                                <br><span class="detalle">{{ fila.canal }}
+                                {% if fila.fecha %}· {{ fila.fecha.strftime('%d/%m/%Y') }}{% endif %}</span>
+                            </td>
+                            <td class="num">{{ '%.2f'|format(fila.ingreso_neto) }}</td>
+                            <td class="num">{{ '%.2f'|format(fila.total or 0) }}</td>
+                            <td class="num marca">{{ '%.2f'|format(fila.ingreso_neto - (fila.total or 0)) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+        {% endif %}
+
+        <p class="aclaracion">
+            <strong>Margen %</strong> es sobre toda la plata que entró, envío incluido:
+            de lo que se facturó, cuánto quedó.
+            <strong>Margen s/mercadería %</strong> saca el envío de los dos lados —del
+            ingreso y del costo— y dice cuánto deja el producto: es el que se compara
+            contra el Excel y el que decide un precio.
+            El costo de cada venta es el que estaba vigente el día que se vendió, no el
+            de hoy: cambiar un costo en
+            <a href="{{ url_for('productos.listar_stock') }}">Stock y Costos</a> no
+            reescribe el margen de lo ya vendido.
+        </p>
+    </div>
+</body>
+</html>

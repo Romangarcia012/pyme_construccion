@@ -94,6 +94,10 @@ app.register_blueprint(ventas_bp)
 from rutas_productos import productos_bp
 app.register_blueprint(productos_bp)
 
+# MARGEN POR PRODUCTO Y CANAL (FASE-REPORTES-S3-MARGEN)
+from rutas_reportes import reportes_bp
+app.register_blueprint(reportes_bp)
+
 @app.route('/')
 def index():
     return redirect(url_for('login'))
