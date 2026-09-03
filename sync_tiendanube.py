@@ -595,6 +595,7 @@ def _upsert_pedido(canal, datos, crudo, mapa):
     pedido.total_bruto = datos['total_bruto']
     pedido.total_descuentos = datos['total_descuentos']
     pedido.total_envio = datos['total_envio']
+    pedido.costo_envio_vendedor = datos['costo_envio_vendedor']
     pedido.total_impuestos = datos['total_impuestos']
     pedido.total = datos['total']
     pedido.raw_payload = crudo

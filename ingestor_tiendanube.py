@@ -171,6 +171,46 @@ def envio_del_cliente(crudo):
     del campo viejo dice textual que 0 es free shipping). Confundirlos hace que
     un pedido con envio caro parezca uno con envio bonificado.
     """
+    total = _sumar_costo_de_fulfillments(crudo, 'consumer_cost')
+    if total is not None:
+        return total
+    return a_decimal(crudo.get('shipping_cost_customer'), por_defecto=None)
+
+
+def envio_del_vendedor(crudo):
+    """Lo que el envio le costo a la tienda, o None si Tiendanube no lo mando.
+
+    El hermano de envio_del_cliente(), sobre el otro monto del mismo nodo:
+    fulfillments[].shipping.merchant_cost.value. Los dos suelen coincidir, pero
+    no son el mismo dato ni tienen por que empatar. Cuando la tienda bonifica el
+    envio el comprador paga 0 y el flete lo sigue pagando el vendedor; cuando
+    cobra un envio fijo y el correo sale mas caro, la diferencia tambien la come
+    la tienda. `total_envio` es plata que ENTRA, esto es plata que SALE: restarla
+    es la unica forma de saber si un pedido con envio dejo margen.
+
+    Tampoco es el costo de la mercaderia: eso es
+    pedido_item.costo_unitario_snapshot, otro concepto y otra tabla.
+
+    Mismo criterio del None que en envio_del_cliente(): None es "no vino el
+    dato", CERO es "vino y es cero" (envio que a la tienda no le costo nada).
+    El campo viejo `shipping_cost_owner` -el que este mismo monto tenia en el
+    recurso Order antes del 2025/04/24- queda de respaldo para los payloads
+    guardados antes del cambio.
+    """
+    total = _sumar_costo_de_fulfillments(crudo, 'merchant_cost')
+    if total is not None:
+        return total
+    return a_decimal(crudo.get('shipping_cost_owner'), por_defecto=None)
+
+
+def _sumar_costo_de_fulfillments(crudo, clave):
+    """Suma fulfillments[].shipping[clave].value, o None si no hay ninguno.
+
+    Un pedido puede partirse en varios despachos y cada uno trae su propio
+    costo, asi que se SUMAN. Devolver None -y no CERO- cuando no hay ni un
+    valor es lo que deja al llamador caer al campo viejo en vez de escribir un
+    cero inventado.
+    """
     total = CERO
     hubo_dato = False
     for fulfillment in (crudo.get('fulfillments') or []):
@@ -181,15 +221,13 @@ def envio_del_cliente(crudo):
         envio = fulfillment.get('shipping')
         if not isinstance(envio, dict):
             continue
-        costo = envio.get('consumer_cost')
+        costo = envio.get(clave)
         if not isinstance(costo, dict) or costo.get('value') is None:
             continue
         total += a_decimal(costo.get('value'))
         hubo_dato = True
 
-    if hubo_dato:
-        return total
-    return a_decimal(crudo.get('shipping_cost_customer'), por_defecto=None)
+    return total if hubo_dato else None
 
 
 class IngestorTiendanube(IngestorCanal):
@@ -331,6 +369,11 @@ class IngestorTiendanube(IngestorCanal):
             # cuando pasa, subtotal - descuentos + envio no llega al `total` del
             # pedido y esa diferencia es el envio que falta.
             envio = CERO
+        # A diferencia de total_envio, esta columna SI es nullable: el None se
+        # guarda tal cual y significa "Tiendanube no mando el dato". No hace
+        # falta el CERO de consuelo de arriba, que ahi es obligado porque
+        # total_envio es NOT NULL.
+        envio_vendedor = envio_del_vendedor(crudo)
         descuentos = a_decimal(crudo.get('discount'))
         # La tienda argentina factura con IVA incluido y la API no manda un
         # campo de impuestos en el pedido. Si algun dia lo manda, entra aca
@@ -354,6 +397,7 @@ class IngestorTiendanube(IngestorCanal):
             'total_bruto': subtotal,
             'total_descuentos': descuentos,
             'total_envio': envio,
+            'costo_envio_vendedor': envio_vendedor,
             'total_impuestos': impuestos,
             'total': total,
             # No hay tabla de clientes en este proyecto y `pedido` no tiene

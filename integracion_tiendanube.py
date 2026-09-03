@@ -348,6 +348,38 @@ def _json_de_lista(resp, ruta):
     return datos
 
 
+def _json_de_objeto(resp, ruta):
+    """El body de un recurso unico, validado.
+
+    404 devuelve None y no explota: un pedido puede borrarse entre que la lista
+    lo nombro y el detalle lo pide. Es el mismo criterio que _json_de_lista con
+    la tienda sin productos, sobre un recurso que en vez de lista es un dict.
+    """
+    if resp.status_code == 404:
+        return None
+
+    if resp.status_code != 200:
+        raise ErrorTiendanube(
+            'Tiendanube rechazo la consulta de datos.',
+            detalle='HTTP %s en GET %s: %s' % (resp.status_code, ruta, _recorte(resp))
+        )
+
+    try:
+        datos = resp.json()
+    except ValueError as exc:
+        raise ErrorTiendanube(
+            'Tiendanube devolvio una respuesta que no se pudo interpretar.',
+            detalle='respuesta no-JSON en GET %s: %s' % (ruta, _recorte(resp))
+        ) from exc
+
+    if not isinstance(datos, dict):
+        raise ErrorTiendanube(
+            'Tiendanube devolvio una respuesta con un formato inesperado.',
+            detalle='GET %s no devolvio un objeto sino %s' % (ruta, type(datos).__name__)
+        )
+    return datos
+
+
 def _hay_pagina_siguiente(resp, cantidad):
     """Si seguir pidiendo paginas.
 
@@ -388,7 +420,7 @@ def paginar(ruta, access_token, params=None):
 
 
 # Pide que cada pedido venga con sus fulfillment orders enteros en vez de solo
-# los ids. Es lo unico que trae el costo de envio (shipping.consumer_cost).
+# los ids. Hace falta, pero no alcanza: ver traer_pedidos().
 AGREGADO_FULFILLMENT = 'fulfillment_orders'
 
 
@@ -397,27 +429,74 @@ def traer_productos(store_id, access_token):
     return paginar('%s/products' % store_id, access_token)
 
 
+def traer_pedido(store_id, access_token, pedido_id):
+    """Un pedido solo, del endpoint de DETALLE. None si ya no esta.
+
+    Es la unica llamada de toda la API que devuelve el costo de envio. Ver
+    traer_pedidos() para el por que.
+    """
+    ruta = '%s/orders/%s' % (store_id, pedido_id)
+    resp = _get_api(ruta, access_token, params={'aggregates': AGREGADO_FULFILLMENT})
+    return _json_de_objeto(resp, ruta)
+
+
+def _detallar(store_id, access_token, resumido):
+    """Cambia el pedido resumido de la lista por el completo del detalle.
+
+    Si el detalle no viene (pedido borrado entre las dos llamadas), se queda
+    con el resumido: perder el pedido entero seria peor que guardarlo sin los
+    costos. Un error HTTP de verdad SI se propaga, y el cron reintenta en 20
+    minutos: es preferible una corrida que falla fuerte a uno que guarda
+    pedidos a medias sin que nadie se entere.
+    """
+    if not isinstance(resumido, dict):
+        return resumido
+    pedido_id = resumido.get('id')
+    if pedido_id is None:
+        return resumido
+    detalle = traer_pedido(store_id, access_token, pedido_id)
+    return detalle if detalle is not None else resumido
+
+
 def traer_pedidos(store_id, access_token, desde=None, hasta=None):
-    """Pedidos de la tienda, crudos.
+    """Pedidos de la tienda, crudos y completos: lista + detalle de cada uno.
 
     Sin rango se trae todo el historico: es un backfill manual y con este
     volumen (menos de 500 pedidos/mes) son unas pocas paginas. Filtrar por
     fecha es una optimizacion, no un requisito de correctitud: el upsert
     aguanta traer lo mismo dos veces.
 
-    `aggregates=fulfillment_orders` no es opcional: sin el, `fulfillments`
-    vuelve resumido y el costo de envio no viene en ningun lado del pedido.
-    Tiendanube saco las propiedades de envio del recurso Order el 2025/04/24
-    ("Removed deprecated shipping properties from the Order resource in favor
-    of Fulfillment Order properties") y el monto quedo adentro de cada
-    fulfillment order. Ver AGREGADO_FULFILLMENT.
+    Por que dos llamadas y no una. Tiendanube saco las propiedades de envio del
+    recurso Order el 2025/04/24 ("Removed deprecated shipping properties from
+    the Order resource in favor of Fulfillment Order properties") y el monto
+    quedo adentro de cada fulfillment order. `aggregates=fulfillment_orders`
+    hace falta para que `fulfillments` venga como objetos y no como ids
+    sueltos, pero NO alcanza: el endpoint de LISTA devuelve el fulfillment
+    recortado -type, extras, carrier.name, option.name y nada mas-, sin
+    consumer_cost ni merchant_cost. Los costos solo viajan en el endpoint de
+    DETALLE, con el mismo aggregate. Verificado contra la tienda real: la
+    lista no los trae en ningun caso.
+
+    Por eso cada pedido de la lista se vuelve a pedir de a uno. Se guarda el
+    payload de detalle entero, no solo los costos: al top level tiene las
+    mismas claves que el de la lista (verificado campo por campo contra los
+    pedidos reales), asi que es un superconjunto y no se pierde nada de lo que
+    ya se leia.
+
+    El costo es una request extra por pedido devuelto. A este volumen no
+    molesta: el balde del rate limit es de 40 con drenaje de 2 req/s -x10 en
+    los planes Next y Evolution- y _get_api ya frena solo antes de llenarlo.
+    Si algun dia la lista devuelve cientos de pedidos por corrida, el filtro
+    por `desde` es lo que mantiene esto chico: pide solo los que cambiaron.
     """
     params = {'aggregates': AGREGADO_FULFILLMENT}
     if desde is not None:
         params['updated_at_min'] = desde.strftime('%Y-%m-%dT%H:%M:%S+00:00')
     if hasta is not None:
         params['updated_at_max'] = hasta.strftime('%Y-%m-%dT%H:%M:%S+00:00')
-    return paginar('%s/orders' % store_id, access_token, params=params or None)
+
+    resumidos = paginar('%s/orders' % store_id, access_token, params=params or None)
+    return [_detallar(store_id, access_token, pedido) for pedido in resumidos]
 
 
 # ============================================================================

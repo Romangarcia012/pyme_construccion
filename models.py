@@ -318,6 +318,18 @@ class Pedido(db.Model):
     total_bruto = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     total_descuentos = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     total_envio = db.Column(db.Numeric(14, 2), nullable=False, default=0)
+    # Lo que el envio le costo AL VENDEDOR (merchant_cost), que no es lo mismo
+    # que total_envio (consumer_cost, lo que pago el comprador): la tienda
+    # puede bonificar el envio y comerse la diferencia, o cobrar de mas. Sin
+    # este campo el margen real de un pedido con envio no se puede calcular.
+    #
+    # Nullable a proposito, y es la unica diferencia de forma con total_envio:
+    # NULL significa "Tiendanube no mando el dato", no "el envio salio gratis".
+    # Un CERO aca seria una afirmacion sobre la plata que nadie hizo.
+    #
+    # No confundir con pedido_item.costo_unitario_snapshot: eso es el costo de
+    # la MERCADERIA, esto es el costo del FLETE.
+    costo_envio_vendedor = db.Column(db.Numeric(14, 2))
     total_impuestos = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     total = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     # Texto libre que escribe quien carga la venta a mano ("cliente Juan Perez",

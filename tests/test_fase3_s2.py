@@ -158,6 +158,12 @@ class RespuestaFalsa:
         return self._datos
 
 
+def _es_detalle_de_pedido(url):
+    """GET /orders/{id} y no GET /orders. Lo que decide es lo que va despues."""
+    marca = '/orders/'
+    return marca in url and bool(url.split(marca, 1)[1].strip('/'))
+
+
 class ApiFalsa:
     """requests.get de mentira, con paginacion y rate limit simulados.
 
@@ -191,6 +197,10 @@ class ApiFalsa:
             return RespuestaFalsa(429, {'message': 'Too many requests'},
                                   headers={'Retry-After': '7'})
 
+        detalle = self._detalle_de_pedido(url)
+        if detalle is not None:
+            return detalle
+
         if '/products' in url:
             datos = self.productos
         elif '/orders' in url:
@@ -201,6 +211,26 @@ class ApiFalsa:
             return RespuestaFalsa(404, [])
 
         return self._pagina(datos, params)
+
+    def _detalle_de_pedido(self, url):
+        """Contesta GET /orders/{id}, o None si la URL no es esa.
+
+        FASE-REPORTES-S3-FIX2: traer_pedidos() pide la lista y despues el
+        detalle de cada pedido, porque el costo de envio solo viaja en el
+        detalle. Las dos URLs comparten prefijo, asi que lo que decide es si
+        hay algo DESPUES de /orders/.
+        """
+        marca = '/orders/'
+        if marca not in url:
+            return None
+        cola = url.split(marca, 1)[1].strip('/')
+        if not cola:
+            return None
+
+        for pedido in self.pedidos:
+            if str(pedido.get('id')) == cola:
+                return RespuestaFalsa(200, pedido, headers=dict(self.headers_extra))
+        return RespuestaFalsa(404, {'message': 'Not found'})
 
     def _pagina(self, datos, params):
         """Corta la lista segun ?page=, y avisa con Link si hay siguiente."""
@@ -642,9 +672,28 @@ class TestPaginacion(BaseSync):
         self.assertEqual(Pedido.query.count(), 2)
 
     def test_pide_el_maximo_por_pagina(self):
+        """Los LISTADOS piden 200 por pagina.
+
+        El detalle de un pedido (FASE-REPORTES-S3-FIX2) queda afuera a
+        proposito: es un recurso unico, no un listado, y no lleva per_page.
+        """
         api, _, _ = self.correr()
-        for llamada in api.llamadas:
+
+        listados = [ll for ll in api.llamadas if not _es_detalle_de_pedido(ll['url'])]
+        self.assertTrue(listados)
+        for llamada in listados:
             self.assertEqual(llamada['params']['per_page'], 200)
+
+    def test_el_detalle_de_pedido_no_es_un_listado(self):
+        """Contracara del test de arriba: que el detalle exista y no pagine."""
+        api, _, _ = self.correr()
+
+        detalles = [ll for ll in api.llamadas if _es_detalle_de_pedido(ll['url'])]
+        self.assertEqual(len(detalles), len(PEDIDOS))
+        for llamada in detalles:
+            self.assertNotIn('per_page', llamada['params'])
+            self.assertNotIn('page', llamada['params'])
+            self.assertEqual(llamada['params']['aggregates'], 'fulfillment_orders')
 
     def test_todas_las_llamadas_llevan_user_agent_y_el_header_propietario(self):
         api, _, _ = self.correr()
