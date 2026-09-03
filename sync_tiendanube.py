@@ -570,6 +570,13 @@ def _upsert_pedido(canal, datos, crudo, mapa):
     del lado del canal) y un pedido editado puede tener lineas nuevas, menos
     lineas o cantidades distintas. Borrar y reescribir es lo unico que no
     duplica ni deja lineas fantasma.
+
+    Lo que NO se reescribe es costo_unitario_snapshot: se rescata de las lineas
+    viejas ANTES de borrarlas y se le devuelve a la linea nueva del mismo
+    producto. Sin ese rescate el "snapshot" no congelaba nada -- cada corrida
+    del sync volvia a leer producto.costo_unitario, asi que cambiar una lista
+    de precios reescribia el margen de todos los pedidos ya vendidos, que es
+    justo lo que el campo existe para impedir (models.py, PedidoItem).
     """
     if not datos.get('id_externo'):
         raise ErrorIngesta('El pedido vino sin id de Tiendanube.', canal='tiendanube',
@@ -602,6 +609,10 @@ def _upsert_pedido(canal, datos, crudo, mapa):
     pedido.fecha_sync = datetime.utcnow()
     db.session.flush()
 
+    # Antes del borrado, no despues: las filas se destruyen enteras y con ellas
+    # el unico registro de cuanto costaba la mercaderia el dia de la venta.
+    previos = _snapshots_previos(pedido)
+
     for viejo in list(pedido.items):
         db.session.delete(viejo)
     db.session.flush()
@@ -621,14 +632,58 @@ def _upsert_pedido(canal, datos, crudo, mapa):
             precio_unitario=datos_item['precio_unitario'],
             descuento_unitario=datos_item['descuento_unitario'],
             subtotal=datos_item['subtotal'],
-            # Congela el costo de HOY. Va a ser NULL hasta que Roman cargue los
-            # costos a mano: Tiendanube no los tiene. Es el estado real, no un
-            # dato faltante que haya que rellenar con cero.
-            costo_unitario_snapshot=_costo_actual(producto_id),
+            # El costo del dia de la venta si la linea ya lo tenia, el de hoy
+            # si es la primera vez que se ve. Va a ser NULL mientras Roman no
+            # cargue los costos a mano: Tiendanube no los tiene. Es el estado
+            # real, no un dato faltante que haya que rellenar con cero.
+            costo_unitario_snapshot=_snapshot_de(previos, producto_id),
         ))
 
     db.session.flush()
     return es_nuevo, sin_mapear
+
+
+def _snapshots_previos(pedido):
+    """producto_id -> los costos ya congelados de sus lineas, en orden de fila.
+
+    Se lee ANTES de que _upsert_pedido borre las lineas. La clave es el
+    producto y no la fila porque pedido_item no tiene identidad propia del lado
+    del canal: el producto es lo unico de una linea que sobrevive a que
+    Tiendanube le reescriba el nombre, la cantidad o el precio.
+
+    Un producto que aparece en dos lineas del mismo pedido deja sus dos costos
+    en una lista y se consumen en orden. No pretende emparejar cada costo con
+    "su" linea -- para eso no hay dato -- pero es determinista y conserva el
+    conjunto, que es lo que el reporte de margen suma.
+
+    Las lineas sin producto_id no entran: su snapshot es NULL por definicion
+    (_costo_actual devuelve None sin producto) y no hay nada que conservar.
+    """
+    previos = {}
+    for item in pedido.items:
+        if item.producto_id is None or item.costo_unitario_snapshot is None:
+            continue
+        previos.setdefault(item.producto_id, []).append(item.costo_unitario_snapshot)
+    return previos
+
+
+def _snapshot_de(previos, producto_id):
+    """El costo que le toca a una linea que se esta reinsertando.
+
+    Si la linea ya venia con costo congelado se conserva ESE, aunque
+    producto.costo_unitario haya cambiado desde entonces: es el costo del dia
+    de la venta y el margen de un pedido cerrado no se reescribe porque hoy la
+    mercaderia salga mas cara.
+
+    Solo toma el costo de hoy una linea nueva, o una que todavia no tenia
+    ninguno. Ese segundo caso es a proposito y es como se completan los pedidos
+    que se sincronizaron antes de que existiera la pantalla de costos: mientras
+    el snapshot sea NULL no hay nada congelado que proteger.
+    """
+    pendientes = previos.get(producto_id)
+    if pendientes:
+        return pendientes.pop(0)
+    return _costo_actual(producto_id)
 
 
 def _costo_actual(producto_id):
