@@ -750,8 +750,23 @@ class SyncLog(db.Model):
     fecha_inicio = db.Column(db.DateTime, nullable=False, default=datetime.utcnow, index=True)
     fecha_fin = db.Column(db.DateTime)
 
+    # Quien apreto "Sincronizar" (FASE-AUDITORIA-S3). NULL no es un dato que
+    # falta: es la respuesta "lo disparo el cron". El cron corre sin sesion y
+    # sin request, asi que no hay ninguna persona a la que atribuirle la
+    # corrida -- y confundir eso con "no se sabe" seria peor que no guardarlo.
+    #
+    # Esto NO es una fila de historial: la escritura del sync sigue afuera de
+    # TABLAS_AUDITADAS (FASE-AUDITORIA-S1) porque no tiene actor humano. Lo
+    # que tiene actor humano es el CLIC, y el clic vive aca.
+    #
+    # Nullable tambien por el mismo motivo que en `historial`: borrar una
+    # cuenta no puede borrar la bitacora. Sin cascade, SQLAlchemy anula la FK
+    # y la corrida sigue registrada.
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), index=True)
+
     canal = db.relationship('CanalVenta', backref='sync_logs')
     cuenta_cobro = db.relationship('CuentaCobro', backref='sync_logs')
+    usuario = db.relationship('Usuario', backref='sync_logs')
 
 
 class ReglaCategorizacion(db.Model):

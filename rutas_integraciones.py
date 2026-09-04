@@ -226,7 +226,11 @@ def sincronizar_tiendanube():
     app_obj = current_app._get_current_object()
 
     try:
-        arranco, mensaje = sync_tiendanube.lanzar_backfill(app_obj, canal.id)
+        # Quien apreto el boton queda anotado en sync_log (FASE-AUDITORIA-S3).
+        # Esta es la unica de las tres puertas del sync que tiene una persona
+        # identificada; las dos automaticas no pasan nada y dejan NULL.
+        arranco, mensaje = sync_tiendanube.lanzar_backfill(
+            app_obj, canal.id, usuario_id=current_user.id)
     except Exception as exc:
         db.session.rollback()
         _log(f'no se pudo lanzar el backfill de Tiendanube: {exc!r}')

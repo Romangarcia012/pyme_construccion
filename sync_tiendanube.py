@@ -16,7 +16,9 @@ DISPARO: dos, con el mismo cuerpo.
     apenas el comando retorna, asi que la corrida es sincronica.
 
 Los dos pasan por `_reservar_corrida` y por `correr_backfill`; lo unico que
-cambia es quien espera el resultado. Sigue sin haber Celery, RQ, Redis ni
+cambia es quien espera el resultado -- y quien queda anotado: el manual estampa
+en sync_log el usuario que hizo clic (FASE-AUDITORIA-S3), el periodico deja esa
+columna en NULL porque no hay nadie a quien atribuirle la corrida. Sigue sin haber Celery, RQ, Redis ni
 webhooks: el volumen (menos de 500 pedidos/mes) no los justifica.
 
 IDEMPOTENCIA: apretar el boton dos veces no puede duplicar nada. Cada escritura
@@ -156,6 +158,10 @@ def ultimo_sync(canal_id):
     fines = [fila.fecha_fin for fila in filas if fila.fecha_fin]
     mensajes = [fila.mensaje_error for fila in filas if fila.mensaje_error]
 
+    # Las dos filas de una corrida se crean juntas con el mismo disparador, asi
+    # que alcanza con mirar una. None = la disparo el cron.
+    disparador = ultima.usuario.nombre if ultima.usuario_id else None
+
     def _resumen(entidad):
         fila = por_entidad.get(entidad)
         if fila is None:
@@ -174,6 +180,8 @@ def ultimo_sync(canal_id):
         'productos': _resumen(ENTIDAD_PRODUCTO),
         'pedidos': _resumen(ENTIDAD_PEDIDO),
         'mensaje_error': mensajes[0] if mensajes else None,
+        # Nombre de quien la disparo a mano, o None si fue automatica.
+        'disparada_por': disparador,
     }
 
 
@@ -181,11 +189,17 @@ def ultimo_sync(canal_id):
 # Disparo
 # ---------------------------------------------------------------------------
 
-def _reservar_corrida(canal_id):
+def _reservar_corrida(canal_id, usuario_id=None):
     """Toma el turno de sincronizacion del canal (FASE-SYNC-CRON-S1).
 
     Devuelve (arranque, None) si el turno quedo tomado, o (None, motivo) si ya
     hay una corrida en curso o el canal no esta conectado.
+
+    `usuario_id` es quien apreto el boton (FASE-AUDITORIA-S3). Es opcional y
+    por defecto None porque las dos puertas automaticas -- el endpoint con
+    token y el script periodico -- no tienen a nadie a quien atribuirle la
+    corrida. Se estampa aca y no adentro del thread justamente porque aca
+    todavia estamos en el request, con la sesion del que hizo clic.
 
     Desde que el cron corre solo, "ya hay uno" dejo de ser una lectura
     informativa y paso a ser la guarda: el boton manual y el cron (o dos
@@ -218,18 +232,22 @@ def _reservar_corrida(canal_id):
     for entidad in (ENTIDAD_PRODUCTO, ENTIDAD_PEDIDO):
         db.session.add(SyncLog(
             canal_id=canal_id, entidad=entidad, operacion=OPERACION,
-            estado='corriendo', fecha_inicio=arranque,
+            estado='corriendo', fecha_inicio=arranque, usuario_id=usuario_id,
         ))
     db.session.commit()
     return arranque, None
 
 
-def lanzar_backfill(app_obj, canal_id):
+def lanzar_backfill(app_obj, canal_id, usuario_id=None):
     """Deja la corrida marcada como 'corriendo' y arranca el thread.
 
     Devuelve (arrancó: bool, mensaje para el usuario).
+
+    `usuario_id` viaja solo hasta `_reservar_corrida`, que corre ANTES del
+    thread: el hilo no lo recibe ni lo necesita. Sin sesion ni request adentro
+    del thread, cualquier intento de averiguar ahi quien fue seria imposible.
     """
-    arranque, motivo = _reservar_corrida(canal_id)
+    arranque, motivo = _reservar_corrida(canal_id, usuario_id=usuario_id)
     if arranque is None:
         return False, motivo
 
