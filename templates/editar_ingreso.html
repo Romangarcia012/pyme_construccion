@@ -140,7 +140,7 @@
             <h1>Editar Ingreso</h1>
             
             <div class="info-box">
-                Registrado: {{ ingreso.fecha.strftime('%d/%m/%Y') }}
+                Cargado el {{ ingreso.fecha_creacion.strftime('%d/%m/%Y') if ingreso.fecha_creacion else '-' }}
             </div>
             
             <form method="POST">
@@ -149,6 +149,11 @@
                     <textarea name="descripcion" id="descripcion" required>{{ ingreso.descripcion }}</textarea>
                 </div>
                 
+                <div class="form-group">
+                    <label for="fecha">Fecha</label>
+                    <input type="date" name="fecha" id="fecha" value="{{ ingreso.fecha.isoformat() }}" required autocomplete="off">
+                </div>
+
                 <div class="form-group">
                     <label for="monto">Monto ($)</label>
                     <input type="number" name="monto" id="monto" step="0.01" min="0" required value="{{ ingreso.monto }}" autocomplete="off">

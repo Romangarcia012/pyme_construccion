@@ -23,8 +23,17 @@ class Usuario(UserMixin, db.Model):
     
     # Relaciones
     empresa = db.relationship('Empresa', backref='usuarios')
-    gastos = db.relationship('Gasto', backref='usuario', lazy=True, cascade='all, delete-orphan')
-    ingresos = db.relationship('Ingreso', backref='usuario', lazy=True, cascade='all, delete-orphan')
+    # SIN cascade='all, delete-orphan' desde FASE-CAJA-GENERAL-S2, mismo
+    # criterio que `historial`: la caja es de la EMPRESA, no de la persona que
+    # tipeo la fila. Borrar una cuenta ponia en cero el libro entero -- y con
+    # el la unica constancia de en que se gasto la plata. Ahora SQLAlchemy
+    # anula `usuario_id` (por eso paso a nullable en las dos tablas) y la fila
+    # sigue viva colgada de `empresa_id`.
+    #
+    # `categorias` conserva el cascade a proposito: ver la nota en
+    # `eliminar_cuenta`, donde se reasignan antes de borrar al usuario.
+    gastos = db.relationship('Gasto', backref='usuario', lazy=True)
+    ingresos = db.relationship('Ingreso', backref='usuario', lazy=True)
     categorias = db.relationship('Categoria', backref='usuario', lazy=True, cascade='all, delete-orphan')
     
     def set_password(self, password):
@@ -66,11 +75,21 @@ class Gasto(db.Model):
     descripcion = db.Column(db.String(200), nullable=False)
     monto = db.Column(db.Numeric(14, 2), nullable=False)
     fecha = db.Column(db.Date, nullable=False)
-    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=False)
+    # FASE-CAJA-GENERAL-S2: el duenio de la fila es la EMPRESA. Antes era el
+    # usuario, y con eso un "libro unico de caja" no era unico: el dia que
+    # Nachi tenga login, cada uno veria su mitad y nadie la caja. Es el mismo
+    # arreglo que FASE-AUDITORIA-S2 le hizo a `historial`.
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'),
+                           nullable=False, index=True)
+    # NULLABLE desde la misma slice: quien tipeo la fila sigue siendo un dato
+    # util, pero no puede ser el que decide si la fila existe. Al borrarse la
+    # cuenta queda en NULL y el gasto sobrevive.
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=True)
     categoria_id = db.Column(db.Integer, db.ForeignKey('categoria.id'))
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     
     categoria = db.relationship('Categoria', backref='gastos')
+    empresa = db.relationship('Empresa', backref='gastos')
 
     # --- Ampliacion FASE2-S1 (todos opcionales: no rompen filas existentes) ---
     proveedor = db.Column(db.String(150))
@@ -88,11 +107,15 @@ class Ingreso(db.Model):
     descripcion = db.Column(db.String(200), nullable=False)
     monto = db.Column(db.Numeric(14, 2), nullable=False)
     fecha = db.Column(db.Date, nullable=False)
-    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=False)
+    # Mismo par que en Gasto y por el mismo motivo (FASE-CAJA-GENERAL-S2).
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'),
+                           nullable=False, index=True)
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=True)
     categoria_id = db.Column(db.Integer, db.ForeignKey('categoria.id'))
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
     
     categoria = db.relationship('Categoria', backref='ingresos')
+    empresa = db.relationship('Empresa', backref='ingresos')
 
 class Historial(db.Model):
     __tablename__ = 'historial'

@@ -10,6 +10,8 @@ from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from flask_mail import Mail, Message
 from functools import wraps
+from sqlalchemy.orm import joinedload
+import operator
 import secrets
 import string
 import os
@@ -409,14 +411,86 @@ def logout():
     flash('Sesión cerrada', 'success')
     return redirect(url_for('login'))
 
+# ================= HELPERS DE GASTO / INGRESO / CATEGORIA =================
+# FASE-CAJA-GENERAL-S2. Los tres nacen de la misma correccion: gasto e ingreso
+# pasaron a ser de la EMPRESA y no del usuario, asi que todo lo que los rodea
+# -- el rango de fechas, el combo de categorias, la fecha del alta -- tuvo que
+# dejar de mirar `current_user.id`.
+
+def _filtrar_por_fecha(consulta, columna):
+    """Aplica el rango ?fecha_inicio / ?fecha_fin a una consulta, EN SQL.
+
+    Antes cada listado traia todas las filas de la tabla y filtraba la lista
+    en Python. Con dos gastos daba igual; con el libro de caja de un anio, no.
+
+    Una fecha que no parsea se ignora en vez de voltear el request con un 500:
+    el filtro es una comodidad de la pantalla, no un dato que valga romper.
+    """
+    for clave, comparar in (('fecha_inicio', operator.ge),
+                            ('fecha_fin', operator.le)):
+        crudo = (request.args.get(clave) or '').strip()
+        if not crudo:
+            continue
+        try:
+            limite = datetime.strptime(crudo, '%Y-%m-%d').date()
+        except ValueError:
+            continue
+        consulta = consulta.filter(comparar(columna, limite))
+    return consulta
+
+
+def _fecha_del_form(crudo, por_defecto=None):
+    """El campo `fecha` del form como date. Invalido = ValueError.
+
+    Vacio devuelve `por_defecto`, o hoy si no se paso ninguno. Las ediciones
+    pasan la fecha que ya tenia la fila: un campo que no vino no puede
+    significar "movela a hoy" en silencio.
+
+    POR QUE EXISTE
+
+    El alta hardcodeaba `datetime.now().date()` y el form ni ofrecia el campo:
+    era imposible cargar el historico del Excel, que arranca el 28/07. Y la
+    edicion hacia `request.form['fecha']` contra una plantilla que no tenia
+    ese input -- o sea que editar un gasto SIEMPRE reventaba con KeyError, y
+    el `except Exception` de la ruta lo mostraba como "Error al editar: fecha".
+    Nadie lo noto porque las tablas estaban vacias.
+
+    `.get()` en vez de `[]` es la mitad del arreglo; la otra mitad es el input
+    en las cuatro plantillas.
+    """
+    crudo = (crudo or '').strip()
+    if not crudo:
+        return por_defecto or datetime.now().date()
+    return datetime.strptime(crudo, '%Y-%m-%d').date()
+
+
+def _categorias_de(empresa_id, tipo=None):
+    """Las categorias de la EMPRESA, no las del usuario logueado.
+
+    `categoria` sigue colgando de `usuario_id` (no se le toco el esquema en
+    esta slice), pero las siete categorias Korvo las siembra la migracion
+    sobre UN usuario por empresa. Si el combo siguiera filtrando por
+    `current_user.id`, el segundo socio que se loguee no veria ninguna y no
+    podria cargar un gasto: la semilla quedaria a nombre de una sola persona.
+    El join las devuelve a nivel empresa sin necesidad de migrar la tabla.
+    """
+    consulta = (Categoria.query
+                .join(Usuario, Categoria.usuario_id == Usuario.id)
+                .filter(Usuario.empresa_id == empresa_id))
+    if tipo:
+        consulta = consulta.filter(Categoria.tipo == tipo)
+    return consulta.order_by(Categoria.nombre)
+
+
 # ======================== DASHBOARD ========================
 
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    # FILTRAR POR USUARIO (SIN FILTRO DE FECHA)
-    gastos = Gasto.query.filter_by(usuario_id=current_user.id).all()
-    ingresos = Ingreso.query.filter_by(usuario_id=current_user.id).all()
+    # FILTRAR POR EMPRESA (SIN FILTRO DE FECHA)
+    empresa_id = current_user.empresa_id
+    gastos = Gasto.query.filter_by(empresa_id=empresa_id).all()
+    ingresos = Ingreso.query.filter_by(empresa_id=empresa_id).all()
     
     config = current_user.empresa
     
@@ -430,8 +504,8 @@ def dashboard():
     ingresos_cat = ingresos_por_categoria(ingresos)
     
     # Últimos movimientos
-    gastos_recientes = Gasto.query.filter_by(usuario_id=current_user.id).order_by(Gasto.fecha.desc()).limit(10).all()
-    ingresos_recientes = Ingreso.query.filter_by(usuario_id=current_user.id).order_by(Ingreso.fecha.desc()).limit(10).all()
+    gastos_recientes = Gasto.query.filter_by(empresa_id=empresa_id).order_by(Gasto.fecha.desc()).limit(10).all()
+    ingresos_recientes = Ingreso.query.filter_by(empresa_id=empresa_id).order_by(Ingreso.fecha.desc()).limit(10).all()
     
     return render_template('dashboard.html',
                          current_user=current_user,
@@ -451,135 +525,152 @@ def nuevo_gasto():
         try:
             descripcion = request.form.get('descripcion', '').strip()
             monto_str = request.form.get('monto', '').strip()
-            
+
             # Validaciones
             if not descripcion:
                 flash('La descripción es obligatoria', 'danger')
                 return redirect(url_for('nuevo_gasto'))
-            
+
             if not monto_str:
                 flash('El monto es obligatorio', 'danger')
                 return redirect(url_for('nuevo_gasto'))
-            
+
             try:
                 monto = Decimal(monto_str)
             except InvalidOperation:
                 flash('El monto debe ser un número válido', 'danger')
                 return redirect(url_for('nuevo_gasto'))
-            
+
             if monto <= 0:
                 flash('El monto debe ser mayor a 0', 'danger')
                 return redirect(url_for('nuevo_gasto'))
-            
+
+            # La fecha la elige quien carga. Vacia = hoy; invalida se avisa en
+            # vez de guardar el gasto en un dia que nadie pidio.
+            try:
+                fecha = _fecha_del_form(request.form.get('fecha'))
+            except ValueError:
+                flash('La fecha no es válida (formato AAAA-MM-DD)', 'danger')
+                return redirect(url_for('nuevo_gasto'))
+
             if not request.form.get('categoria_id'):
                 flash('Debes seleccionar una categoría', 'danger')
                 return redirect(url_for('nuevo_gasto'))
-            
-            # Verificar que la categoría pertenezca al usuario
-            categoria = Categoria.query.get(int(request.form['categoria_id']))
-            if not categoria or categoria.usuario_id != current_user.id:
+
+            # La categoría tiene que ser de la EMPRESA (ver _categorias_de)
+            categoria = _categorias_de(current_user.empresa_id).filter(
+                Categoria.id == int(request.form['categoria_id'])).first()
+            if not categoria:
                 flash('Categoría inválida', 'danger')
                 return redirect(url_for('nuevo_gasto'))
-            
+
             gasto = Gasto(
-                fecha=datetime.now().date(),
+                fecha=fecha,
                 descripcion=descripcion,
                 monto=monto,
-                categoria_id=int(request.form['categoria_id']),
+                categoria_id=categoria.id,
+                empresa_id=current_user.empresa_id,
                 usuario_id=current_user.id
             )
             db.session.add(gasto)
             db.session.commit()
-            
-            registrar_cambio(current_user.id, 'crear', 'gasto', gasto.id, 
+
+            registrar_cambio(current_user.id, 'crear', 'gasto', gasto.id,
                            f'Gasto de ${monto} - {descripcion}')
-            
+
             flash('✅ Gasto registrado exitosamente', 'success')
             return redirect(url_for('dashboard'))
         except Exception as e:
             flash(f'❌ Error al agregar gasto: {str(e)}', 'danger')
-    
-    # FILTRAR CATEGORÍAS DEL USUARIO
-    categorias = Categoria.query.filter_by(usuario_id=current_user.id, tipo='gasto').all()
-    return render_template('agregar_gasto.html', categorias=categorias)
+
+    # CATEGORÍAS DE LA EMPRESA
+    categorias = _categorias_de(current_user.empresa_id, tipo='gasto').all()
+    return render_template('agregar_gasto.html', categorias=categorias,
+                           hoy=datetime.now().date().isoformat())
 
 @app.route('/gasto/editar/<int:id>', methods=['GET', 'POST'])
 @login_required
 def editar_gasto(id):
     gasto = Gasto.query.get_or_404(id)
-    
-    # Verificar que pertenezca al usuario
-    if gasto.usuario_id != current_user.id:
+
+    # Verificar que pertenezca a la EMPRESA
+    if gasto.empresa_id != current_user.empresa_id:
         flash('No tienes permiso', 'danger')
         return redirect(url_for('dashboard'))
-    
+
     if request.method == 'POST':
         try:
             descripcion = request.form.get('descripcion', '').strip()
             monto = Decimal(request.form.get('monto') or 0)
-            
+
             if not descripcion or monto <= 0:
                 flash('Complete todos los campos correctamente', 'danger')
                 return redirect(url_for('editar_gasto', id=id))
-            
+
+            try:
+                fecha = _fecha_del_form(request.form.get('fecha'),
+                                        por_defecto=gasto.fecha)
+            except ValueError:
+                flash('La fecha no es válida (formato AAAA-MM-DD)', 'danger')
+                return redirect(url_for('editar_gasto', id=id))
+
+            categoria = _categorias_de(current_user.empresa_id).filter(
+                Categoria.id == int(request.form.get('categoria_id') or 0)).first()
+            if not categoria:
+                flash('Categoría inválida', 'danger')
+                return redirect(url_for('editar_gasto', id=id))
+
             gasto.descripcion = descripcion
             gasto.monto = monto
-            gasto.categoria_id = int(request.form['categoria_id'])
-            gasto.fecha = datetime.strptime(request.form['fecha'], '%Y-%m-%d').date()
-            
+            gasto.categoria_id = categoria.id
+            gasto.fecha = fecha
+
             db.session.commit()
-            
-            registrar_cambio(current_user.id, 'editar', 'gasto', gasto.id, 
+
+            registrar_cambio(current_user.id, 'editar', 'gasto', gasto.id,
                            f'Gasto actualizado - {descripcion}')
-            
+
             flash('Gasto actualizado', 'success')
             return redirect(url_for('listar_gastos'))
         except Exception as e:
             flash(f'Error al editar: {str(e)}', 'danger')
-    
-    # FILTRAR CATEGORÍAS DEL USUARIO
-    categorias = Categoria.query.filter_by(usuario_id=current_user.id, tipo='gasto').all()
+
+    # CATEGORÍAS DE LA EMPRESA
+    categorias = _categorias_de(current_user.empresa_id, tipo='gasto').all()
     return render_template('editar_gasto.html', gasto=gasto, categorias=categorias)
 
 @app.route('/gasto/eliminar/<int:id>', methods=['POST'])
 @login_required
 def eliminar_gasto(id):
     gasto = Gasto.query.get_or_404(id)
-    
-    # Verificar que pertenezca al usuario
-    if gasto.usuario_id != current_user.id:
+
+    # Verificar que pertenezca a la EMPRESA
+    if gasto.empresa_id != current_user.empresa_id:
         flash('No tienes permiso', 'danger')
         return redirect(url_for('dashboard'))
-    
+
     descripcion = gasto.descripcion
     monto = gasto.monto
-    
+
     db.session.delete(gasto)
     db.session.commit()
-    
-    registrar_cambio(current_user.id, 'eliminar', 'gasto', id, 
+
+    registrar_cambio(current_user.id, 'eliminar', 'gasto', id,
                    f'Gasto eliminado - ${monto} - {descripcion}')
-    
+
     flash('Gasto eliminado', 'success')
     return redirect(url_for('listar_gastos'))
 
 @app.route('/gasto/listar')
 @login_required
 def listar_gastos():
-    fecha_inicio = request.args.get('fecha_inicio')
-    fecha_fin = request.args.get('fecha_fin')
-    
-    # FILTRAR POR USUARIO
-    gastos = Gasto.query.filter_by(usuario_id=current_user.id).order_by(Gasto.fecha.desc()).all()
-    
-    if fecha_inicio:
-        fecha_inicio_obj = datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
-        gastos = [g for g in gastos if g.fecha >= fecha_inicio_obj]
-    
-    if fecha_fin:
-        fecha_fin_obj = datetime.strptime(fecha_fin, '%Y-%m-%d').date()
-        gastos = [g for g in gastos if g.fecha <= fecha_fin_obj]
-    
+    # POR EMPRESA, y el rango de fechas EN SQL (ver _filtrar_por_fecha)
+    gastos = (_filtrar_por_fecha(
+                  Gasto.query.filter_by(empresa_id=current_user.empresa_id),
+                  Gasto.fecha)
+              .order_by(Gasto.fecha.desc())
+              .all())
+
     return render_template('listar_gastos.html', gastos=gastos)
 
 # ======================== INGRESOS ========================
@@ -590,118 +681,235 @@ def nuevo_ingreso():
     if request.method == 'POST':
         try:
             descripcion = request.form.get('descripcion', '').strip()
-            monto = Decimal(request.form.get('monto') or 0)
-            
-            if not descripcion or monto <= 0:
-                flash('Complete todos los campos correctamente', 'danger')
+            monto_str = request.form.get('monto', '').strip()
+
+            # Las validaciones son las mismas que las de nuevo_gasto, campo por
+            # campo. Antes esta ruta hacia `int(request.form['categoria_id'])`
+            # sin mirar nada: sin categoría elegida reventaba con KeyError y el
+            # `except Exception` de abajo lo mostraba como "Error al agregar
+            # ingreso: 'categoria_id'", que no le dice a nadie qué falta.
+            if not descripcion:
+                flash('La descripción es obligatoria', 'danger')
                 return redirect(url_for('nuevo_ingreso'))
-            
-            # Verificar que la categoría pertenezca al usuario
-            categoria = Categoria.query.get(int(request.form['categoria_id']))
-            if not categoria or categoria.usuario_id != current_user.id:
+
+            if not monto_str:
+                flash('El monto es obligatorio', 'danger')
+                return redirect(url_for('nuevo_ingreso'))
+
+            try:
+                monto = Decimal(monto_str)
+            except InvalidOperation:
+                flash('El monto debe ser un número válido', 'danger')
+                return redirect(url_for('nuevo_ingreso'))
+
+            if monto <= 0:
+                flash('El monto debe ser mayor a 0', 'danger')
+                return redirect(url_for('nuevo_ingreso'))
+
+            try:
+                fecha = _fecha_del_form(request.form.get('fecha'))
+            except ValueError:
+                flash('La fecha no es válida (formato AAAA-MM-DD)', 'danger')
+                return redirect(url_for('nuevo_ingreso'))
+
+            if not request.form.get('categoria_id'):
+                flash('Debes seleccionar una categoría', 'danger')
+                return redirect(url_for('nuevo_ingreso'))
+
+            # La categoría tiene que ser de la EMPRESA (ver _categorias_de)
+            categoria = _categorias_de(current_user.empresa_id).filter(
+                Categoria.id == int(request.form['categoria_id'])).first()
+            if not categoria:
                 flash('Categoría inválida', 'danger')
                 return redirect(url_for('nuevo_ingreso'))
-            
+
             ingreso = Ingreso(
-                fecha=datetime.now().date(),
+                fecha=fecha,
                 descripcion=descripcion,
                 monto=monto,
-                categoria_id=int(request.form['categoria_id']),
+                categoria_id=categoria.id,
+                empresa_id=current_user.empresa_id,
                 usuario_id=current_user.id
             )
             db.session.add(ingreso)
             db.session.commit()
-            
-            registrar_cambio(current_user.id, 'crear', 'ingreso', ingreso.id, 
+
+            registrar_cambio(current_user.id, 'crear', 'ingreso', ingreso.id,
                            f'Ingreso de ${monto} - {descripcion}')
-            
+
             flash('Ingreso agregado exitosamente', 'success')
             return redirect(url_for('dashboard'))
         except Exception as e:
             flash(f'Error al agregar ingreso: {str(e)}', 'danger')
-    
-    # FILTRAR CATEGORÍAS DEL USUARIO
-    categorias = Categoria.query.filter_by(usuario_id=current_user.id, tipo='ingreso').all()
-    return render_template('agregar_ingreso.html', categorias=categorias)
+
+    # CATEGORÍAS DE LA EMPRESA
+    categorias = _categorias_de(current_user.empresa_id, tipo='ingreso').all()
+    return render_template('agregar_ingreso.html', categorias=categorias,
+                           hoy=datetime.now().date().isoformat())
 
 @app.route('/ingreso/editar/<int:id>', methods=['GET', 'POST'])
 @login_required
 def editar_ingreso(id):
     ingreso = Ingreso.query.get_or_404(id)
-    
-    # Verificar que pertenezca al usuario
-    if ingreso.usuario_id != current_user.id:
+
+    # Verificar que pertenezca a la EMPRESA
+    if ingreso.empresa_id != current_user.empresa_id:
         flash('No tienes permiso', 'danger')
         return redirect(url_for('dashboard'))
-    
+
     if request.method == 'POST':
         try:
             descripcion = request.form.get('descripcion', '').strip()
             monto = Decimal(request.form.get('monto') or 0)
-            
+
             if not descripcion or monto <= 0:
                 flash('Complete todos los campos correctamente', 'danger')
                 return redirect(url_for('editar_ingreso', id=id))
-            
+
+            try:
+                fecha = _fecha_del_form(request.form.get('fecha'),
+                                        por_defecto=ingreso.fecha)
+            except ValueError:
+                flash('La fecha no es válida (formato AAAA-MM-DD)', 'danger')
+                return redirect(url_for('editar_ingreso', id=id))
+
+            categoria = _categorias_de(current_user.empresa_id).filter(
+                Categoria.id == int(request.form.get('categoria_id') or 0)).first()
+            if not categoria:
+                flash('Categoría inválida', 'danger')
+                return redirect(url_for('editar_ingreso', id=id))
+
             ingreso.descripcion = descripcion
             ingreso.monto = monto
-            ingreso.categoria_id = int(request.form['categoria_id'])
-            ingreso.fecha = datetime.strptime(request.form['fecha'], '%Y-%m-%d').date()
-            
+            ingreso.categoria_id = categoria.id
+            ingreso.fecha = fecha
+
             db.session.commit()
-            
-            registrar_cambio(current_user.id, 'editar', 'ingreso', ingreso.id, 
+
+            registrar_cambio(current_user.id, 'editar', 'ingreso', ingreso.id,
                            f'Ingreso actualizado - {descripcion}')
-            
+
             flash('Ingreso actualizado', 'success')
             return redirect(url_for('listar_ingresos'))
         except Exception as e:
             flash(f'Error al editar: {str(e)}', 'danger')
-    
-    # FILTRAR CATEGORÍAS DEL USUARIO
-    categorias = Categoria.query.filter_by(usuario_id=current_user.id, tipo='ingreso').all()
+
+    # CATEGORÍAS DE LA EMPRESA
+    categorias = _categorias_de(current_user.empresa_id, tipo='ingreso').all()
     return render_template('editar_ingreso.html', ingreso=ingreso, categorias=categorias)
 
 @app.route('/ingreso/eliminar/<int:id>', methods=['POST'])
 @login_required
 def eliminar_ingreso(id):
     ingreso = Ingreso.query.get_or_404(id)
-    
-    # Verificar que pertenezca al usuario
-    if ingreso.usuario_id != current_user.id:
+
+    # Verificar que pertenezca a la EMPRESA
+    if ingreso.empresa_id != current_user.empresa_id:
         flash('No tienes permiso', 'danger')
         return redirect(url_for('dashboard'))
-    
+
     descripcion = ingreso.descripcion
     monto = ingreso.monto
-    
+
     db.session.delete(ingreso)
     db.session.commit()
-    
-    registrar_cambio(current_user.id, 'eliminar', 'ingreso', id, 
+
+    registrar_cambio(current_user.id, 'eliminar', 'ingreso', id,
                    f'Ingreso eliminado - ${monto} - {descripcion}')
-    
+
     flash('Ingreso eliminado', 'success')
     return redirect(url_for('listar_ingresos'))
 
 @app.route('/ingreso/listar')
 @login_required
 def listar_ingresos():
-    fecha_inicio = request.args.get('fecha_inicio')
-    fecha_fin = request.args.get('fecha_fin')
-    
-    # FILTRAR POR USUARIO
-    ingresos = Ingreso.query.filter_by(usuario_id=current_user.id).order_by(Ingreso.fecha.desc()).all()
-    
-    if fecha_inicio:
-        fecha_inicio_obj = datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
-        ingresos = [i for i in ingresos if i.fecha >= fecha_inicio_obj]
-    
-    if fecha_fin:
-        fecha_fin_obj = datetime.strptime(fecha_fin, '%Y-%m-%d').date()
-        ingresos = [i for i in ingresos if i.fecha <= fecha_fin_obj]
-    
+    # POR EMPRESA, y el rango de fechas EN SQL (ver _filtrar_por_fecha)
+    ingresos = (_filtrar_por_fecha(
+                    Ingreso.query.filter_by(empresa_id=current_user.empresa_id),
+                    Ingreso.fecha)
+                .order_by(Ingreso.fecha.desc())
+                .all())
+
     return render_template('listar_ingresos.html', ingresos=ingresos)
+
+# ======================== CAJA GENERAL ========================
+
+# El cero con el que arranca el saldo, y el tipo de todos los montos del libro.
+# Decimal, nunca float: son pesos.
+CERO = Decimal('0.00')
+
+
+@app.route('/caja-general')
+@login_required
+def caja_general():
+    """El libro unico de la empresa: gasto e ingreso en una sola lista, con
+    saldo corriente. Es la hoja CAJA GENERAL del Excel de Roman.
+
+    LA CUENTA
+
+    Es la columna E del Excel, `=SUM(E_anterior + entrada - salida)`: el saldo
+    de cada fila es el de la anterior mas lo que entro menos lo que salio. Se
+    acumula una sola vez recorriendo la lista, no se recalcula la suma entera
+    en cada fila -- que da el mismo numero pero es cuadratico, y este libro
+    esta hecho para crecer todos los dias.
+
+    El saldo arranca en 0. No hay saldo inicial en el modelo, y el Excel
+    tampoco lo tiene: su primera fila ya baja a -969.285 porque la mercaderia
+    inicial se cargo como salida y la plata que Roman puso no se cargo como
+    nada. Con el aporte de capital cargado como ingreso (categoria "Aporte de
+    capital (socios)"), el arranque en 0 pasa a ser el correcto y no una
+    coincidencia.
+
+    LO QUE NO HACE
+
+    No mira un solo pedido. Las ventas entran a mano, como ingreso, igual que
+    en el Excel -- sumar `pedido.total` ademas de eso contaria la misma plata
+    dos veces, y el Excel usa el neto por venta mientras que `pedido.total` es
+    el bruto. Que esas dos cosas se junten es una decision para otra slice.
+    """
+    empresa_id = current_user.empresa_id
+
+    ingresos = (Ingreso.query
+                .options(joinedload(Ingreso.categoria))
+                .filter_by(empresa_id=empresa_id)
+                .all())
+    gastos = (Gasto.query
+              .options(joinedload(Gasto.categoria))
+              .filter_by(empresa_id=empresa_id)
+              .all())
+
+    movimientos = [
+        {'tipo': 'ingreso', 'id': i.id, 'fecha': i.fecha,
+         'descripcion': i.descripcion,
+         'categoria': i.categoria.nombre if i.categoria else None,
+         'entrada': i.monto, 'salida': CERO}
+        for i in ingresos
+    ] + [
+        {'tipo': 'gasto', 'id': g.id, 'fecha': g.fecha,
+         'descripcion': g.descripcion,
+         'categoria': g.categoria.nombre if g.categoria else None,
+         'entrada': CERO, 'salida': g.monto}
+        for g in gastos
+    ]
+
+    # Fecha, despues id. `tipo` cierra el desempate porque gasto e ingreso
+    # tienen secuencias de id separadas: sin el, dos filas del mismo dia con
+    # el mismo id quedarian en un orden que depende del planificador y el
+    # saldo se leeria distinto en cada recarga.
+    movimientos.sort(key=lambda m: (m['fecha'], m['id'], m['tipo']))
+
+    saldo = CERO
+    for movimiento in movimientos:
+        saldo += movimiento['entrada'] - movimiento['salida']
+        movimiento['saldo'] = saldo
+
+    return render_template(
+        'caja_general.html',
+        movimientos=movimientos,
+        total_entradas=sum((m['entrada'] for m in movimientos), CERO),
+        total_salidas=sum((m['salida'] for m in movimientos), CERO),
+        saldo_final=saldo)
+
 
 # ======================== CONFIGURACIÓN ========================
 
@@ -805,7 +1013,8 @@ def nueva_categoria():
                 flash('Debes seleccionar un tipo valido', 'danger')
                 return redirect(url_for('nueva_categoria'))
             
-            if Categoria.query.filter_by(nombre=nombre, usuario_id=current_user.id).first():
+            if _categorias_de(current_user.empresa_id).filter(
+                    Categoria.nombre == nombre).first():
                 flash('Esta categoria ya existe', 'danger')
                 return redirect(url_for('nueva_categoria'))
             
@@ -827,7 +1036,7 @@ def nueva_categoria():
 @app.route('/categorias')
 @login_required
 def listar_categorias():
-    categorias = Categoria.query.filter_by(usuario_id=current_user.id).all()
+    categorias = _categorias_de(current_user.empresa_id).all()
     
     # Contar transacciones por categoría
     categorias_datos = []
@@ -849,9 +1058,10 @@ def listar_categorias():
 @login_required
 def editar_categoria(id):
     categoria = Categoria.query.get_or_404(id)
-    
-    # Verificar que pertenezca al usuario
-    if categoria.usuario_id != current_user.id:
+
+    # Verificar que pertenezca a la EMPRESA
+    if (categoria.usuario is None
+            or categoria.usuario.empresa_id != current_user.empresa_id):
         flash('No tienes permiso', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -880,9 +1090,10 @@ def editar_categoria(id):
 @login_required
 def eliminar_categoria(id):
     categoria = Categoria.query.get_or_404(id)
-    
-    # Verificar que pertenezca al usuario
-    if categoria.usuario_id != current_user.id:
+
+    # Verificar que pertenezca a la EMPRESA
+    if (categoria.usuario is None
+            or categoria.usuario.empresa_id != current_user.empresa_id):
         flash('No tienes permiso', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -911,20 +1122,10 @@ from flask import send_file
 @app.route('/exportar/gastos')
 @login_required
 def exportar_gastos():
-    # Obtener fechas de los parámetros GET
-    fecha_inicio = request.args.get('fecha_inicio')
-    fecha_fin = request.args.get('fecha_fin')
-    
-    gastos = Gasto.query.filter_by(usuario_id=current_user.id).all()
-    
-    # Filtrar por fecha si se proporciona
-    if fecha_inicio:
-        fecha_inicio = datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
-        gastos = [g for g in gastos if g.fecha >= fecha_inicio]
-    
-    if fecha_fin:
-        fecha_fin = datetime.strptime(fecha_fin, '%Y-%m-%d').date()
-        gastos = [g for g in gastos if g.fecha <= fecha_fin]
+
+    gastos = _filtrar_por_fecha(
+        Gasto.query.filter_by(empresa_id=current_user.empresa_id),
+        Gasto.fecha).order_by(Gasto.fecha).all()
     
     wb = Workbook()
     ws = wb.active
@@ -983,20 +1184,10 @@ def exportar_gastos():
 @app.route('/exportar/ingresos')
 @login_required
 def exportar_ingresos():
-    # Obtener fechas de los parámetros GET
-    fecha_inicio = request.args.get('fecha_inicio')
-    fecha_fin = request.args.get('fecha_fin')
-    
-    ingresos = Ingreso.query.filter_by(usuario_id=current_user.id).all()
-    
-    # Filtrar por fecha si se proporciona
-    if fecha_inicio:
-        fecha_inicio = datetime.strptime(fecha_inicio, '%Y-%m-%d').date()
-        ingresos = [i for i in ingresos if i.fecha >= fecha_inicio]
-    
-    if fecha_fin:
-        fecha_fin = datetime.strptime(fecha_fin, '%Y-%m-%d').date()
-        ingresos = [i for i in ingresos if i.fecha <= fecha_fin]
+
+    ingresos = _filtrar_por_fecha(
+        Ingreso.query.filter_by(empresa_id=current_user.empresa_id),
+        Ingreso.fecha).order_by(Ingreso.fecha).all()
     
     wb = Workbook()
     ws = wb.active
@@ -1085,14 +1276,35 @@ def eliminar_cuenta():
             empresa_id = current_user.empresa_id
             nombre_usuario = current_user.nombre
             
-            # Eliminar gastos
-            Gasto.query.filter_by(usuario_id=usuario_id).delete()
-            
-            # Eliminar ingresos
-            Ingreso.query.filter_by(usuario_id=usuario_id).delete()
-            
-            # Eliminar categorias
-            Categoria.query.filter_by(usuario_id=usuario_id).delete()
+            # LA CAJA YA NO SE BORRA ACA (FASE-CAJA-GENERAL-S2).
+            #
+            # Estaban los dos `.delete()` de gasto e ingreso, mas el cascade
+            # del modelo: borrarse la cuenta ponia en cero el libro de caja de
+            # la empresa entera. Ahora las filas quedan, con `usuario_id` en
+            # NULL (por eso la columna paso a nullable) y el `empresa_id`
+            # intacto -- exactamente lo que FASE-AUDITORIA-S2 hizo con el
+            # historial, y por el mismo motivo: en que se gasto la plata no es
+            # un dato de la persona que lo tipeo.
+            #
+            # SQLAlchemy las anula solas, por los backrefs 'gastos'/'ingresos'.
+
+            # Las CATEGORIAS si siguen colgando de un usuario (no se les toco
+            # el esquema en esta slice), pero las siete Korvo las siembra la
+            # migracion sobre UNO de los usuarios de la empresa. Si esa cuenta
+            # se borrara, la empresa perderia su vocabulario y los gastos que
+            # acaban de sobrevivir se quedarian sin etiqueta. Asi que se
+            # reasignan al que quede, y solo se borran si no queda nadie --
+            # caso en el que la empresa entera se va unas lineas mas abajo.
+            heredero = (Usuario.query
+                        .filter(Usuario.empresa_id == empresa_id,
+                                Usuario.id != usuario_id)
+                        .order_by(Usuario.id)
+                        .first())
+            if heredero is not None:
+                Categoria.query.filter_by(usuario_id=usuario_id).update(
+                    {'usuario_id': heredero.id})
+            else:
+                Categoria.query.filter_by(usuario_id=usuario_id).delete()
 
             # EL HISTORIAL YA NO SE BORRA ACA (FASE-AUDITORIA-S2).
             #

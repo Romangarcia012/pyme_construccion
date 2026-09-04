@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Caja general</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container { max-width: 1000px; margin: 0 auto; }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        h1 { color: #fff; font-size: 28px; }
+        .subtitulo { color: #888; font-size: 14px; margin-top: 6px; }
+
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn-volver:hover { background: #555; }
+
+        .acciones { display: flex; gap: 10px; flex-wrap: wrap; }
+        .btn-accion {
+            background: #2a2a2a;
+            border: 1px solid #3a3a3a;
+            color: #e0e0e0;
+            padding: 9px 14px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 14px;
+            transition: 0.3s;
+        }
+        .btn-accion:hover { background: #333; }
+
+        /* Los totales van ARRIBA de la tabla, como en la hoja del Excel: la
+           fila 2 de CAJA GENERAL es el =SUM() de las columnas C y D, antes de
+           la primera fecha. Se conserva el lugar, no solo la cuenta. */
+        .totales {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .total {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 16px 18px;
+        }
+        .total .etiqueta {
+            color: #888;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .total .valor {
+            color: #fff;
+            font-size: 22px;
+            font-weight: 600;
+            margin-top: 6px;
+            font-variant-numeric: tabular-nums;
+        }
+        .entrada .valor { color: #5fb87a; }
+        .salida .valor { color: #d1706b; }
+        .saldo.negativo .valor { color: #d1706b; }
+        .saldo.positivo .valor { color: #5fb87a; }
+
+        .tabla-container {
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            overflow-x: auto;
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+
+        th {
+            background: #252525;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #fff;
+            border-bottom: 1px solid #333;
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 11px 15px;
+            border-bottom: 1px solid #2a2a2a;
+            vertical-align: middle;
+        }
+
+        .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+        th.num { text-align: right; }
+
+        .fecha { color: #bbb; white-space: nowrap; }
+
+        /* Verde lo que entra, rojo lo que sale. Es la unica lectura que la
+           pantalla tiene que dar de un vistazo. */
+        .col-entrada { color: #5fb87a; }
+        .col-salida { color: #d1706b; }
+
+        /* El saldo corriente es la columna que importa: se destaca del resto
+           y cambia de color cuando la caja esta en rojo. */
+        .col-saldo { color: #fff; font-weight: 600; }
+        .col-saldo.rojo { color: #d1706b; }
+
+        /* La categoria es lo que el Excel no tiene: alla vive adentro del
+           texto libre de la columna DIARIO. Aca ya esta modelada, asi que se
+           muestra aparte y en chico. */
+        .categoria {
+            color: #999;
+            font-size: 12px;
+            border: 1px solid #333;
+            border-radius: 4px;
+            padding: 2px 8px;
+            white-space: nowrap;
+        }
+        .sin-categoria { color: #d6a441; font-size: 12px; }
+
+        .vacio { color: #888; padding: 40px 30px; text-align: center; line-height: 1.6; }
+        .vacio a { color: #7aa7d6; }
+
+        .aclaracion {
+            color: #777;
+            font-size: 13px;
+            margin-top: 15px;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 768px) {
+            .totales { grid-template-columns: 1fr; }
+            table { font-size: 14px; }
+            th, td { padding: 10px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('dashboard') }}" class="btn-volver">← Volver al Dashboard</a>
+
+        <div class="header">
+            <div>
+                <h1>Caja general</h1>
+                <p class="subtitulo">
+                    Todo lo que entró y salió, en una sola lista, con el saldo al día.
+                </p>
+            </div>
+            <div class="acciones">
+                <a class="btn-accion" href="{{ url_for('nuevo_ingreso') }}">+ Ingreso</a>
+                <a class="btn-accion" href="{{ url_for('nuevo_gasto') }}">+ Gasto</a>
+            </div>
+        </div>
+
+        <div class="totales">
+            <div class="total entrada">
+                <div class="etiqueta">Entradas</div>
+                <div class="valor">{{ '%.2f'|format(total_entradas) }}</div>
+            </div>
+            <div class="total salida">
+                <div class="etiqueta">Salidas</div>
+                <div class="valor">{{ '%.2f'|format(total_salidas) }}</div>
+            </div>
+            <div class="total saldo {{ 'negativo' if saldo_final < 0 else 'positivo' }}">
+                <div class="etiqueta">Saldo</div>
+                <div class="valor">{{ '%.2f'|format(saldo_final) }}</div>
+            </div>
+        </div>
+
+        <div class="tabla-container">
+            {% if movimientos %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Fecha</th>
+                        <th>Concepto</th>
+                        <th>Categoría</th>
+                        <th class="num">Entrada</th>
+                        <th class="num">Salida</th>
+                        <th class="num">Saldo</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for m in movimientos %}
+                    <tr>
+                        <td class="fecha">{{ m.fecha.strftime('%d/%m/%Y') }}</td>
+                        <td>{{ m.descripcion }}</td>
+                        <td>
+                            {% if m.categoria %}
+                                <span class="categoria">{{ m.categoria }}</span>
+                            {% else %}
+                                <span class="sin-categoria">sin categoría</span>
+                            {% endif %}
+                        </td>
+                        <td class="num col-entrada">
+                            {% if m.tipo == 'ingreso' %}{{ '%.2f'|format(m.entrada) }}{% endif %}
+                        </td>
+                        <td class="num col-salida">
+                            {% if m.tipo == 'gasto' %}{{ '%.2f'|format(m.salida) }}{% endif %}
+                        </td>
+                        <td class="num col-saldo {{ 'rojo' if m.saldo < 0 else '' }}">
+                            {{ '%.2f'|format(m.saldo) }}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <p class="vacio">
+                Todavía no hay movimientos cargados.<br>
+                Empezá por el <a href="{{ url_for('nuevo_ingreso') }}">aporte de capital</a>
+                o por el primer <a href="{{ url_for('nuevo_gasto') }}">gasto</a>.
+            </p>
+            {% endif %}
+        </div>
+
+        <p class="aclaracion">
+            El saldo arranca en 0 y se acumula fila por fila, igual que la columna
+            SALDO del Excel. Las ventas entran acá cuando se cargan a mano como
+            ingreso: esta pantalla no lee los pedidos de Tiendanube ni de Mercado
+            Libre, así que la misma plata no se cuenta dos veces.
+        </p>
+    </div>
+</body>
+</html>

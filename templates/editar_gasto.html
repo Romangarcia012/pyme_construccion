@@ -140,7 +140,7 @@
             <h1>Editar Gasto</h1>
             
             <div class="info-box">
-                Registrado: {{ gasto.fecha.strftime('%d/%m/%Y') }}
+                Cargado el {{ gasto.fecha_creacion.strftime('%d/%m/%Y') if gasto.fecha_creacion else '-' }}
             </div>
             
             <form method="POST">
@@ -149,6 +149,11 @@
                     <textarea name="descripcion" id="descripcion" required>{{ gasto.descripcion }}</textarea>
                 </div>
                 
+                <div class="form-group">
+                    <label for="fecha">Fecha</label>
+                    <input type="date" name="fecha" id="fecha" value="{{ gasto.fecha.isoformat() }}" required autocomplete="off">
+                </div>
+
                 <div class="form-group">
                     <label for="monto">Monto ($)</label>
                     <input type="number" name="monto" id="monto" step="0.01" min="0" required value="{{ gasto.monto }}" autocomplete="off">
