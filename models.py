@@ -827,31 +827,117 @@ class Conciliacion(db.Model):
     )
 
 
+# FASE-DEVOLUCIONES-S2: el vocabulario de `devolucion.estado`.
+#
+# Hasta esta slice la columna existia con default 'abierta' y ningun otro valor
+# escrito en ningun lado, porque nadie escribia la tabla. Aca se fija el
+# vocabulario minimo, y la distincion que importa es una sola: si la
+# mercaderia YA volvio o todavia no.
+#
+#   abierta -> el evento esta registrado pero sin resolver. El stock NO se
+#              toca: nada volvio al deposito todavia. Es el estado de un
+#              contracargo en disputa, donde la plata esta trabada y la
+#              mercaderia se la quedo el comprador.
+#   cerrada -> resuelto y la mercaderia esta de vuelta. Es el unico estado que
+#              mueve stock, y lo mueve UNA sola vez por cadena.
+#
+# TERMINAL quiere decir "la cadena llego a donde tenia que llegar", no "la fila
+# es la ultima". Son dos cosas distintas por el append-only: una cadena
+# reabierta despues de cerrada tiene una fila terminal en el medio y una fila
+# vigente que no lo es.
+DEVOLUCION_ABIERTA = 'abierta'
+DEVOLUCION_CERRADA = 'cerrada'
+
+# Los estados que dan por vuelta la mercaderia. Es una tupla y no un valor
+# suelto porque el dia que aparezca un segundo estado terminal (una devolucion
+# aceptada parcialmente, por ejemplo) el chequeo de "ya se movio el stock" no
+# tiene que salir a buscarse por el codigo: se agrega aca y sigue funcionando.
+ESTADOS_DEVOLUCION_TERMINALES = (DEVOLUCION_CERRADA,)
+
+
 class Devolucion(db.Model):
     """Devoluciones y contracargos. APPEND-ONLY: nunca se hace UPDATE ni
     DELETE sobre una fila. Cada cambio de estado entra como fila nueva que
     apunta a la anterior via evento_previo_id; el estado vigente es la ultima
     fila de la cadena. Un contracargo revisado tres veces deja tres filas, y
-    esa historia es justamente lo que hay que poder auditar."""
+    esa historia es justamente lo que hay que poder auditar.
+
+    FASE-DEVOLUCIONES-S2 la bajo a nivel de ITEM. Hasta aca la tabla apuntaba
+    solo a `pedido` y guardaba plata (`monto`, `comision_devuelta`): con eso se
+    puede decir "de este pedido se devolvieron $12.000", pero no QUE volvio ni
+    CUANTAS unidades, que es exactamente lo que hace falta para sumarle al
+    stock. `pedido_item_id` + `cantidad` cierran ese hueco.
+
+    POR QUE DOS COLUMNAS Y NO UNA TABLA HIJA
+
+    Una `devolucion_item` colgando de una tabla append-only obliga a elegir
+    entre dos cosas malas: copiar los items en cada cambio de estado (tres
+    revisiones de un contracargo = tres juegos de items identicos, y ninguna
+    forma de saber cual vale) o colgarlos solo de la primera fila de la cadena
+    (y romper el invariante de que cada fila es el estado COMPLETO del evento).
+    Con las columnas adentro no hay que elegir: cada fila se describe entera a
+    si misma, que es justo lo que el append-only pide.
+
+    Lo que se pierde es poder decir "estas dos lineas volvieron en el mismo
+    acto": una devolucion de dos productos son dos cadenas que comparten
+    `pedido_id` y `fecha_evento`. Nada de lo que hoy existe consume ese
+    agrupamiento, y si algun dia hace falta, se agrega la tabla hija sin tener
+    que migrar estas filas -- las columnas son nullable justamente por eso.
+
+    LAS DOS VAN JUNTAS O NO VA NINGUNA
+
+    Nullable no es "opcional cada una por su lado": el CHECK de abajo exige que
+    o esten las dos o no este ninguna. Una fila con `pedido_item_id` y sin
+    `cantidad` seria una devolucion que no dice cuanto volvio, y una con
+    `cantidad` sin item seria una cantidad de nada.
+
+    Que puedan faltar LAS DOS es a proposito y no un descuido: un contracargo
+    (`tipo='contracargo'`) es un evento de PLATA -- al comprador le devolvieron
+    el dinero y se quedo con el producto. Obligar ahi a una cantidad seria
+    obligar a inventarla. Por eso `cantidad` no es NOT NULL a secas: dentro de
+    una devolucion de mercaderia es obligatoria, y el CHECK la hace
+    obligatoria; fuera de ese caso no hay nada que contar.
+    """
     __tablename__ = 'devolucion'
     id = db.Column(db.Integer, primary_key=True)
     pedido_id = db.Column(db.Integer, db.ForeignKey('pedido.id'), nullable=False, index=True)
+    # La linea del pedido que volvio. NULL = el evento no es de mercaderia
+    # (ver el docstring). Apunta a `pedido_item` y no a `producto` a proposito:
+    # el item es el que sabe cuantas unidades se habian vendido, y contra ese
+    # numero se valida que no se devuelva de mas.
+    pedido_item_id = db.Column(db.Integer, db.ForeignKey('pedido_item.id'), index=True)
+    # Unidades que volvieron. Entero, siempre positivo (lo garantiza el CHECK):
+    # una devolucion negativa seria una venta, y para eso ya esta `pedido`.
+    cantidad = db.Column(db.Integer)
     pago_id = db.Column(db.Integer, db.ForeignKey('pago.id'), index=True)
     evento_previo_id = db.Column(db.Integer, db.ForeignKey('devolucion.id'), index=True)
     tipo = db.Column(db.String(20), nullable=False)  # 'devolucion' | 'contracargo' | 'cancelacion'
+    # Sin UNIQUE, y hoy no molesta porque ningun sync escribe esta tabla: la
+    # unica escritura es la pantalla de carga manual. El dia que exista un sync
+    # de devoluciones va a hacer falta la UNIQUE (o un hash_dedup, como
+    # `movimiento_cuenta`) o reimportar el mismo refund lo va a duplicar --
+    # y duplicarlo suma stock dos veces, no solo una fila de mas.
     id_externo = db.Column(db.String(100), index=True)
     motivo = db.Column(db.String(255))
     moneda = db.Column(db.String(3), nullable=False, default='ARS')
     monto = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     comision_devuelta = db.Column(db.Numeric(14, 2), nullable=False, default=0)
-    estado = db.Column(db.String(30), nullable=False, default='abierta')
+    estado = db.Column(db.String(30), nullable=False, default=DEVOLUCION_ABIERTA)
     fecha_evento = db.Column(db.DateTime, nullable=False, index=True)
     raw_payload = db.Column(db.JSON)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
     pedido = db.relationship('Pedido', backref='devoluciones')
+    pedido_item = db.relationship('PedidoItem', backref='devoluciones')
     pago = db.relationship('Pago', backref='devoluciones')
     evento_previo = db.relationship('Devolucion', remote_side=[id], backref='eventos_siguientes')
+
+    __table_args__ = (
+        db.CheckConstraint(
+            '(pedido_item_id IS NULL AND cantidad IS NULL)'
+            ' OR (pedido_item_id IS NOT NULL AND cantidad IS NOT NULL AND cantidad > 0)',
+            name='ck_devolucion_item_y_cantidad'),
+    )
 
 
 class SyncLog(db.Model):

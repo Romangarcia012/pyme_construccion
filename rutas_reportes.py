@@ -75,6 +75,7 @@ from models import (
     Pedido,
     db,
 )
+from rutas_devoluciones import devuelto_por_item
 from rutas_productos import (
     ESTADOS_NO_VENDIDOS,
     ETIQUETA_SIN_IDENTIFICAR,
@@ -233,6 +234,13 @@ def _nuevo_grupo(nombre):
         'incompletos': 0,
         'descuadres': 0,
         'unidades': 0,
+        # FASE-DEVOLUCIONES-S2. NO se acumula en `_acumular` junto con el resto
+        # y es a proposito: `_acumular` corre solo sobre los pedidos que tienen
+        # los tres costos cargados, y lo devuelto no depende de eso. Un pedido
+        # al que le falta la comision cae en "Sin margen" pero su devolucion
+        # existe igual, y esconderla haria que la columna dependiera de si
+        # Roman ya cargo un numero que no tiene nada que ver.
+        'devuelto': 0,
         'ingreso_neto': CERO,
         'envio': CERO,
         'costo_total': CERO,
@@ -336,6 +344,12 @@ def margen():
                     if item.producto_id}
     mapeos = _mapeos_por_producto(ids_producto)
 
+    # Unidades devueltas por linea. Se muestra al lado del margen sin entrar en
+    # ninguna cuenta: ingreso, costo y ganancia dan lo mismo que antes de esta
+    # slice. Restarlas obligaria a decidir tambien que pasa con el costo de la
+    # mercaderia que volvio, y esa pregunta todavia no esta contestada.
+    devuelto_items = devuelto_por_item(empresa_id)
+
     por_producto = OrderedDict()
     por_canal = OrderedDict()
     multilinea = []
@@ -371,6 +385,14 @@ def margen():
         grupo_canal['pedidos_totales'] += 1
         if grupo_producto is not None:
             grupo_producto['pedidos_totales'] += 1
+
+        # Antes del corte por faltantes de mas abajo, para que una devolucion
+        # de un pedido incompleto igual se vea (ver `_nuevo_grupo`).
+        devuelto_pedido = sum(devuelto_items.get(item.id, 0)
+                              for item in pedido.items)
+        grupo_canal['devuelto'] += devuelto_pedido
+        if grupo_producto is not None:
+            grupo_producto['devuelto'] += devuelto_pedido
 
         faltan = _faltantes(pedido)
         if faltan:

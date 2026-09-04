@@ -43,6 +43,10 @@ from models import (
     Producto,
     db,
 )
+# FASE-DEVOLUCIONES-S2. La importacion va en un solo sentido y no hay ciclo:
+# rutas_devoluciones necesita ESTADOS_NO_VENDIDOS de este modulo y lo importa
+# adentro de la funcion que lo usa, justamente para no cerrarlo.
+from rutas_devoluciones import devuelto_por_producto_y_canal
 
 productos_bp = Blueprint('productos', __name__, url_prefix='/productos')
 
@@ -612,6 +616,19 @@ def _stock_inicial(stock, vendido):
 
     Sin control de stock no hay de donde partir: el vendido solo no dice
     cuanto habia, asi que la fila queda sin control tambien.
+
+    PENDIENTE DE FASE-DEVOLUCIONES-S2, a proposito y no por olvido: esta cuenta
+    NO resta lo devuelto, y con una devolucion encima queda inflada. Una
+    devolucion sube `stock` sin bajar `vendido`, asi que la reconstruccion
+    correcta pasa a ser `stock + vendido - devuelto`. Hoy da igual porque no
+    hay ninguna devolucion cargada, pero en cuanto haya una este numero empieza
+    a mentir por esa cantidad.
+
+    No se corrige aca porque cambiaria un numero que la pantalla ya muestra, y
+    la slice tiene prohibido eso: lo devuelto entra como columna al lado, sin
+    tocar ningun calculo existente. Queda para decidir con Roman junto con la
+    otra mitad de la misma pregunta (si "vendido" deberia ser neto de
+    devoluciones o bruto).
     """
     if stock is None:
         return None
@@ -641,6 +658,9 @@ def resumen_ventas():
 
     mapeos = _mapeos_por_producto([producto.id for producto in productos])
     vendido = _vendido_por_producto_y_canal(empresa_id)
+    # FASE-DEVOLUCIONES-S2: se muestra al lado de lo vendido y no se le resta.
+    # Ver el modulo de devoluciones para que fila de cada cadena cuenta.
+    devuelto = devuelto_por_producto_y_canal(empresa_id)
 
     # Los productos ya vienen ordenados por nombre, asi que el orden en que se
     # crean los grupos es el orden en que se muestran.
@@ -667,11 +687,17 @@ def resumen_ventas():
         total_stock = None
         total_stock_inicial = None
         total_vendido = 0
+        total_devuelto = 0
 
         for producto, etiqueta in grupo['variantes']:
             por_canal = [vendido.get((producto.id, canal_id), 0)
                          for canal_id in ids_canal]
             vendido_fila = sum(por_canal)
+            devuelto_fila = sum(devuelto.get((producto.id, canal_id), 0)
+                                for canal_id in ids_canal)
+            # El vendido que entra aca es el BRUTO, sin restarle lo devuelto:
+            # es el mismo numero que la columna de al lado y el mismo que daba
+            # antes de que existieran las devoluciones.
             stock_inicial = _stock_inicial(producto.stock, vendido_fila)
 
             filas.append({
@@ -683,6 +709,7 @@ def resumen_ventas():
                 'stock': producto.stock,
                 'por_canal': por_canal,
                 'vendido': vendido_fila,
+                'devuelto': devuelto_fila,
                 'activo': producto.activo,
             })
 
@@ -694,6 +721,7 @@ def resumen_ventas():
             # dos cuentas a la vez y la columna sigue cerrando con lo de arriba.
             total_stock_inicial = _sumar_stock(total_stock_inicial, stock_inicial)
             total_vendido += vendido_fila
+            total_devuelto += devuelto_fila
 
         salida.append({
             'nombre': nombre_grupo,
@@ -703,6 +731,7 @@ def resumen_ventas():
                 'stock': total_stock,
                 'por_canal': total_por_canal,
                 'vendido': total_vendido,
+                'devuelto': total_devuelto,
             },
         })
 
@@ -718,6 +747,11 @@ def resumen_ventas():
             'etiqueta': ETIQUETA_SIN_IDENTIFICAR,
             'por_canal': sin_identificar_por_canal,
             'vendido': sum(sin_identificar_por_canal),
+            # Una linea sin producto igual se puede devolver: el evento queda
+            # registrado aunque no haya stock que corregir. Si no se contara
+            # aca, esas unidades no aparecerian en ninguna fila del reporte.
+            'devuelto': sum(devuelto.get((None, canal_id), 0)
+                            for canal_id in ids_canal),
         }
 
     return render_template('productos_resumen.html',

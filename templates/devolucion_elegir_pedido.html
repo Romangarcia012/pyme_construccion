@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Registrar una devolución</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container { max-width: 1000px; margin: 0 auto; }
+
+        .header { margin-bottom: 30px; }
+        h1 { color: #fff; font-size: 28px; }
+        .subtitulo { color: #888; font-size: 14px; margin-top: 6px; }
+
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn-volver:hover { background: #555; }
+
+        .tabla-container {
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            overflow-x: auto;
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+
+        th {
+            background: #252525;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #fff;
+            border-bottom: 1px solid #333;
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #333;
+            vertical-align: middle;
+        }
+
+        tr:last-child td { border-bottom: none; }
+
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        th.num { text-align: right; }
+
+        .apagado { color: #777; font-size: 12px; }
+
+        .btn-elegir {
+            background: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #383838;
+            padding: 7px 13px;
+            border-radius: 4px;
+            font-size: 13px;
+            text-decoration: none;
+            display: inline-block;
+            white-space: nowrap;
+            transition: 0.3s;
+        }
+        .btn-elegir:hover { background: #333; border-color: #4a4a4a; }
+
+        .vacio { color: #888; padding: 30px; text-align: center; }
+
+        .aclaracion {
+            color: #777;
+            font-size: 13px;
+            margin-top: 15px;
+            line-height: 1.5;
+        }
+
+        @media (max-width: 768px) {
+            table { font-size: 14px; }
+            th, td { padding: 10px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('dashboard') }}" class="btn-volver">← Volver al Dashboard</a>
+
+        <div class="header">
+            <h1>Registrar una devolución</h1>
+            <p class="subtitulo">Elegí contra qué venta se devuelve</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div style="padding: 15px; margin-bottom: 20px; border-radius: 6px; border-left: 4px solid {% if category == 'success' %}#28a745{% elif category == 'warning' %}#e0a800{% else %}#dc3545{% endif %}; background: {% if category == 'success' %}rgba(40, 167, 69, 0.1){% elif category == 'warning' %}rgba(224, 168, 0, 0.1){% else %}rgba(220, 53, 69, 0.1){% endif %}; color: {% if category == 'success' %}#51cf66{% elif category == 'warning' %}#ffd43b{% else %}#ff6b6b{% endif %};">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% if pedidos %}
+        <div class="tabla-container">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Pedido</th>
+                        <th>Fecha</th>
+                        <th>Canal</th>
+                        <th>Cliente</th>
+                        <th class="num">Ítems</th>
+                        <th class="num">Total</th>
+                        <th></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pedido in pedidos %}
+                    <tr>
+                        <td>{{ pedido.etiqueta }}</td>
+                        <td>{{ pedido.fecha.strftime('%d/%m/%Y') if pedido.fecha else '—' }}</td>
+                        <td>{{ pedido.canal }}</td>
+                        <td>{% if pedido.cliente %}{{ pedido.cliente }}{% else %}<span class="apagado">—</span>{% endif %}</td>
+                        <td class="num">{{ pedido.items }}</td>
+                        <td class="num">{{ pedido.moneda }} {{ '%.2f'|format(pedido.total or 0) }}</td>
+                        <td class="num">
+                            <a class="btn-elegir"
+                               href="{{ url_for('devoluciones.nueva_devolucion', pedido_id=pedido.id) }}">Devolver</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <div class="tabla-container">
+            <p class="vacio">Todavía no hay ventas registradas.</p>
+        </div>
+        {% endif %}
+
+        <p class="aclaracion">
+            Una devolución suma de vuelta las unidades al stock del producto y,
+            si vino de Tiendanube, le avisa el número nuevo. No modifica lo
+            vendido ni el margen: se muestra como una columna aparte en los reportes.
+        </p>
+    </div>
+</body>
+</html>

@@ -140,6 +140,7 @@
                                     <th class="num {% if loop.first %}corte{% endif %}">{{ columna }}</th>
                                 {% endfor %}
                                 <th class="num corte">Vendido total</th>
+                                <th class="num">Devuelto</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -168,6 +169,7 @@
                                     <td class="num {% if loop.first %}corte{% endif %} {% if not unidades %}cero{% endif %}">{{ unidades }}</td>
                                 {% endfor %}
                                 <td class="num corte {% if not fila.vendido %}cero{% endif %}">{{ fila.vendido }}</td>
+                                <td class="num {% if not fila.devuelto %}cero{% endif %}">{{ fila.devuelto }}</td>
                             </tr>
                             {% endfor %}
                             <tr class="total">
@@ -190,6 +192,7 @@
                                     <td class="num {% if loop.first %}corte{% endif %}">{{ unidades }}</td>
                                 {% endfor %}
                                 <td class="num corte">{{ grupo.total.vendido }}</td>
+                                <td class="num">{{ grupo.total.devuelto }}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -209,6 +212,7 @@
                                     <th class="num">{{ columna }}</th>
                                 {% endfor %}
                                 <th class="num corte">Vendido total</th>
+                                <th class="num">Devuelto</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -218,6 +222,7 @@
                                     <td class="num {% if not unidades %}cero{% endif %}">{{ unidades }}</td>
                                 {% endfor %}
                                 <td class="num corte">{{ sin_identificar.vendido }}</td>
+                                <td class="num {% if not sin_identificar.devuelto %}cero{% endif %}">{{ sin_identificar.devuelto }}</td>
                             </tr>
                         </tbody>
                     </table>
@@ -239,6 +244,8 @@
         <p class="aclaracion">
             El stock lo mantiene Tiendanube y lo descuentan las ventas de mostrador.
             Lo vendido sale de los pedidos registrados, sin contar los cancelados.
+            <strong>Devuelto</strong> son las unidades que volvieron y ya se sumaron
+            al stock: se muestra al lado, no se resta de lo vendido.
         </p>
     </div>
 </body>

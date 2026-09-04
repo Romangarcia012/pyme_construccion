@@ -112,6 +112,10 @@ app.register_blueprint(productos_bp)
 from rutas_reportes import reportes_bp
 app.register_blueprint(reportes_bp)
 
+# DEVOLUCIONES Y VUELTA DE STOCK (FASE-DEVOLUCIONES-S2)
+from rutas_devoluciones import devoluciones_bp
+app.register_blueprint(devoluciones_bp)
+
 # QUIEN HIZO QUE (FASE-AUDITORIA-S2)
 # Se instala despues de los blueprints y no antes: el listener cuelga de
 # db.session, no de las rutas, asi que cubre cualquier escritura de las tablas

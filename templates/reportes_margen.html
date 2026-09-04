@@ -164,6 +164,8 @@
             <p class="bajada">
                 Solo los pedidos de un único producto: en uno de varios no se sabe
                 qué parte de la comisión y del envío le toca a cada uno.
+                <strong>Devuelto</strong> son unidades que volvieron: se muestran
+                al lado y no se restan del ingreso, del costo ni del margen.
             </p>
             <div class="tabla-container">
                 {% if productos %}
@@ -172,6 +174,7 @@
                         <tr>
                             <th>Producto</th>
                             <th class="num">Unid.</th>
+                            <th class="num">Devuelto</th>
                             <th class="num">Ingreso neto</th>
                             <th class="num">Costo total</th>
                             <th class="num corte">Ganancia $</th>
@@ -194,11 +197,16 @@
                             </td>
                             {% if fila.pedidos %}
                                 <td class="num">{{ fila.unidades }}</td>
+                                <td class="num">{{ fila.devuelto }}</td>
                                 <td class="num">{{ '%.2f'|format(fila.ingreso_neto) }}</td>
                                 <td class="num">{{ '%.2f'|format(fila.costo_total) }}</td>
                                 {{ columnas_margen(fila) }}
                             {% else %}
                                 <td class="num">—</td>
+                                <!-- Lo devuelto se muestra aunque el margen no se
+                                     pueda calcular: son preguntas distintas y la
+                                     unidad que volvio, volvio igual. -->
+                                <td class="num">{{ fila.devuelto }}</td>
                                 <td class="num">—</td>
                                 <td class="num">—</td>
                                 <td class="num corte aviso" colspan="3">⚠ Sin margen: falta cargar datos</td>
@@ -228,6 +236,7 @@
                         <tr>
                             <th>Canal</th>
                             <th class="num">Pedidos</th>
+                            <th class="num">Devuelto</th>
                             <th class="num">Ingreso neto</th>
                             <th class="num">Costo total</th>
                             <th class="num corte">Ganancia $</th>
@@ -246,11 +255,13 @@
                             </td>
                             {% if fila.pedidos %}
                                 <td class="num">{{ fila.pedidos }}</td>
+                                <td class="num">{{ fila.devuelto }}</td>
                                 <td class="num">{{ '%.2f'|format(fila.ingreso_neto) }}</td>
                                 <td class="num">{{ '%.2f'|format(fila.costo_total) }}</td>
                                 {{ columnas_margen(fila) }}
                             {% else %}
                                 <td class="num">0</td>
+                                <td class="num">{{ fila.devuelto }}</td>
                                 <td class="num">—</td>
                                 <td class="num">—</td>
                                 <td class="num corte aviso" colspan="3">⚠ Sin margen: falta cargar datos</td>
