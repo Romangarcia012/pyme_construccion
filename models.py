@@ -30,11 +30,15 @@ class Usuario(UserMixin, db.Model):
     # anula `usuario_id` (por eso paso a nullable en las dos tablas) y la fila
     # sigue viva colgada de `empresa_id`.
     #
-    # `categorias` conserva el cascade a proposito: ver la nota en
-    # `eliminar_cuenta`, donde se reasignan antes de borrar al usuario.
+    # `categorias` PERDIO el cascade en FASE-CATEGORIA-S1, por el mismo
+    # motivo y con el mismo mecanismo: el vocabulario con el que se etiqueta
+    # la caja es de la empresa. Mientras colgaba del usuario hacia falta
+    # reasignarlas a mano al borrar una cuenta (estaba en `eliminar_cuenta`)
+    # para que la empresa no se quedara sin etiquetas; con `empresa_id` como
+    # duenio real ese parche ya no hace falta y se fue.
     gastos = db.relationship('Gasto', backref='usuario', lazy=True)
     ingresos = db.relationship('Ingreso', backref='usuario', lazy=True)
-    categorias = db.relationship('Categoria', backref='usuario', lazy=True, cascade='all, delete-orphan')
+    categorias = db.relationship('Categoria', backref='usuario', lazy=True)
     
     def set_password(self, password):
         self.password = generate_password_hash(password)
@@ -65,8 +69,22 @@ class Categoria(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(100), nullable=False)
     tipo = db.Column(db.String(20), nullable=False)  # 'gasto' o 'ingreso'
-    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=False)
+    # FASE-CATEGORIA-S1: mismo par que Gasto e Ingreso, y por el mismo motivo.
+    # El vocabulario con el que se etiqueta la caja es de la EMPRESA: las siete
+    # categorias Korvo las sembro la migracion sobre UN usuario, y mientras esa
+    # fuera la unica pista de a quien pertenecian hacian falta dos parches para
+    # sostenerlo -- un join a usuario en cada consulta, y una reasignacion al
+    # borrar la cuenta. Los dos se fueron con esta columna.
+    empresa_id = db.Column(db.Integer, db.ForeignKey('empresa.id'),
+                           nullable=False, index=True)
+    # NULLABLE: quien tipeo la categoria sigue siendo un dato util, pero no
+    # puede ser el que decide si la fila existe. Al borrarse la cuenta queda en
+    # NULL y la categoria sobrevive -- sin ella, los gastos que FASE-CAJA-
+    # GENERAL-S2 acababa de salvar se quedaban sin etiqueta.
+    usuario_id = db.Column(db.Integer, db.ForeignKey('usuario.id'), nullable=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
+
+    empresa = db.relationship('Empresa', backref='categorias')
     
 
 class Gasto(db.Model):

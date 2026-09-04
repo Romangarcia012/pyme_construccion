@@ -473,16 +473,17 @@ def _fecha_del_form(crudo, por_defecto=None):
 def _categorias_de(empresa_id, tipo=None):
     """Las categorias de la EMPRESA, no las del usuario logueado.
 
-    `categoria` sigue colgando de `usuario_id` (no se le toco el esquema en
-    esta slice), pero las siete categorias Korvo las siembra la migracion
-    sobre UN usuario por empresa. Si el combo siguiera filtrando por
-    `current_user.id`, el segundo socio que se loguee no veria ninguna y no
-    podria cargar un gasto: la semilla quedaria a nombre de una sola persona.
-    El join las devuelve a nivel empresa sin necesidad de migrar la tabla.
+    Hasta FASE-CATEGORIA-S1 esto era un JOIN a `usuario`: `categoria` colgaba
+    de `usuario_id` y la unica forma de llegar a la empresa era pasando por la
+    persona que la habia tipeado. Funcionaba, pero era un parche sobre un
+    esquema equivocado -- y se caia con la fila cuyo usuario ya no existe.
+    Ahora `categoria.empresa_id` dice el duenio directamente y esto es un
+    filtro sobre una columna indexada.
+
+    La funcion queda porque centraliza las otras dos decisiones (el filtro por
+    tipo y el orden alfabetico) que los diez call sites comparten.
     """
-    consulta = (Categoria.query
-                .join(Usuario, Categoria.usuario_id == Usuario.id)
-                .filter(Usuario.empresa_id == empresa_id))
+    consulta = Categoria.query.filter_by(empresa_id=empresa_id)
     if tipo:
         consulta = consulta.filter(Categoria.tipo == tipo)
     return consulta.order_by(Categoria.nombre)
@@ -1052,7 +1053,9 @@ def nueva_categoria():
                 flash('Esta categoria ya existe', 'danger')
                 return redirect(url_for('nueva_categoria'))
             
-            categoria = Categoria(nombre=nombre, tipo=tipo, usuario_id=current_user.id)
+            categoria = Categoria(nombre=nombre, tipo=tipo,
+                                  empresa_id=current_user.empresa_id,
+                                  usuario_id=current_user.id)
             db.session.add(categoria)
             db.session.commit()
             
@@ -1094,8 +1097,7 @@ def editar_categoria(id):
     categoria = Categoria.query.get_or_404(id)
 
     # Verificar que pertenezca a la EMPRESA
-    if (categoria.usuario is None
-            or categoria.usuario.empresa_id != current_user.empresa_id):
+    if categoria.empresa_id != current_user.empresa_id:
         flash('No tienes permiso', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -1126,8 +1128,7 @@ def eliminar_categoria(id):
     categoria = Categoria.query.get_or_404(id)
 
     # Verificar que pertenezca a la EMPRESA
-    if (categoria.usuario is None
-            or categoria.usuario.empresa_id != current_user.empresa_id):
+    if categoria.empresa_id != current_user.empresa_id:
         flash('No tienes permiso', 'danger')
         return redirect(url_for('dashboard'))
     
@@ -1306,7 +1307,8 @@ def not_found(error):
 def eliminar_cuenta():
     if request.method == 'POST':
         try:
-            usuario_id = current_user.id
+            # `usuario_id` se fue con la reasignacion de categorias: era su
+            # unico uso (FASE-CATEGORIA-S1).
             empresa_id = current_user.empresa_id
             nombre_usuario = current_user.nombre
             
@@ -1322,23 +1324,16 @@ def eliminar_cuenta():
             #
             # SQLAlchemy las anula solas, por los backrefs 'gastos'/'ingresos'.
 
-            # Las CATEGORIAS si siguen colgando de un usuario (no se les toco
-            # el esquema en esta slice), pero las siete Korvo las siembra la
-            # migracion sobre UNO de los usuarios de la empresa. Si esa cuenta
-            # se borrara, la empresa perderia su vocabulario y los gastos que
-            # acaban de sobrevivir se quedarian sin etiqueta. Asi que se
-            # reasignan al que quede, y solo se borran si no queda nadie --
-            # caso en el que la empresa entera se va unas lineas mas abajo.
-            heredero = (Usuario.query
-                        .filter(Usuario.empresa_id == empresa_id,
-                                Usuario.id != usuario_id)
-                        .order_by(Usuario.id)
-                        .first())
-            if heredero is not None:
-                Categoria.query.filter_by(usuario_id=usuario_id).update(
-                    {'usuario_id': heredero.id})
-            else:
-                Categoria.query.filter_by(usuario_id=usuario_id).delete()
+            # LAS CATEGORIAS YA NO SE REASIGNAN ACA (FASE-CATEGORIA-S1).
+            #
+            # Estaba el parche que buscaba un "heredero" en la empresa y le
+            # pasaba las categorias del que se iba (y las borraba si no quedaba
+            # nadie). Hacia falta solo porque `categoria.usuario_id` era NOT
+            # NULL con cascade: sin heredero, borrarse la cuenta se llevaba el
+            # vocabulario y dejaba sin etiqueta a los gastos que la slice
+            # anterior acababa de salvar. Ahora el duenio es `empresa_id`, que
+            # nadie toca al borrar una persona: SQLAlchemy anula `usuario_id`
+            # (por eso paso a nullable) y la categoria sigue viva.
 
             # EL HISTORIAL YA NO SE BORRA ACA (FASE-AUDITORIA-S2).
             #
@@ -1359,9 +1354,14 @@ def eliminar_cuenta():
                 otros_usuarios = Usuario.query.filter_by(empresa_id=empresa_id).count()
                 if otros_usuarios == 0:
                     # Se va la empresa entera: no queda nadie a quien mostrarle
-                    # este historial, y `empresa_id` es NOT NULL, asi que
-                    # dejarlo huerfano volteria el borrado con un error de FK.
-                    # Este es el unico caso en que el rastro se va.
+                    # este historial ni a quien servirle este vocabulario, y en
+                    # las dos tablas `empresa_id` es NOT NULL, asi que dejarlas
+                    # huerfanas volteria el borrado con un error de FK. Este es
+                    # el unico caso en que el rastro se va.
+                    #
+                    # `categoria` entra en la lista desde FASE-CATEGORIA-S1: es
+                    # la contracara de que ahora sobreviva a cualquier usuario.
+                    Categoria.query.filter_by(empresa_id=empresa_id).delete()
                     Historial.query.filter_by(empresa_id=empresa_id).delete()
                     db.session.delete(empresa)
 

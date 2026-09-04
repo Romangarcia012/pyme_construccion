@@ -405,6 +405,7 @@ class TestHookNoDuplicaNiHaceRuido(BaseAuditoria):
     def test_tabla_fuera_de_lista_blanca_no_genera_ruido(self):
         """Gasto ya tiene su registrar_cambio manual: el hook no lo toca."""
         categoria = Categoria(nombre='Insumos', tipo='gasto',
+                              empresa_id=self.empresa_id,
                               usuario_id=self.roman_id)
         db.session.add(categoria)
         db.session.commit()

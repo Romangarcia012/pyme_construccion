@@ -84,6 +84,35 @@ CATEGORIAS_KORVO = (
 )
 
 
+# Dos versiones del mismo INSERT, una por esquema. Ver `sembrar_categorias`.
+_SEMBRAR_VIA_USUARIO = """
+    INSERT INTO categoria (nombre, tipo, usuario_id, fecha_creacion)
+    SELECT :nombre, :tipo, duenio.usuario_id, :ahora
+      FROM (SELECT empresa_id, MIN(id) AS usuario_id
+              FROM usuario
+             GROUP BY empresa_id) AS duenio
+     WHERE NOT EXISTS (
+             SELECT 1
+               FROM categoria c
+               JOIN usuario u ON u.id = c.usuario_id
+              WHERE c.nombre = :nombre
+                AND u.empresa_id = duenio.empresa_id)
+"""
+
+_SEMBRAR_VIA_EMPRESA = """
+    INSERT INTO categoria (nombre, tipo, empresa_id, usuario_id, fecha_creacion)
+    SELECT :nombre, :tipo, duenio.empresa_id, duenio.usuario_id, :ahora
+      FROM (SELECT empresa_id, MIN(id) AS usuario_id
+              FROM usuario
+             GROUP BY empresa_id) AS duenio
+     WHERE NOT EXISTS (
+             SELECT 1
+               FROM categoria c
+              WHERE c.nombre = :nombre
+                AND c.empresa_id = duenio.empresa_id)
+"""
+
+
 def sembrar_categorias(conn):
     """Deja las siete categorias Korvo en cada empresa que no las tenga.
 
@@ -94,22 +123,26 @@ def sembrar_categorias(conn):
     Un INSERT por categoria, con parametros, en vez de un solo INSERT con
     VALUES: `CROSS JOIN (VALUES ...) AS c(nombre)` no existe en SQLite, y esto
     tiene que correr igual en la base local que en Supabase.
+
+    MIRA EL ESQUEMA ANTES DE ELEGIR EL INSERT (agregado en FASE-CATEGORIA-S1).
+    Esa revision le puso a `categoria` un `empresa_id` NOT NULL, y esta funcion
+    tiene dos llamadores que ven esquemas distintos: `upgrade()`, que corre una
+    revision ANTES y donde la columna todavia no existe, y los tests, que la
+    llaman contra un `create_all()` del modelo de hoy, donde existe y no admite
+    NULL. Un solo INSERT no sirve para los dos, y hardcodear el viejo dejaria
+    la semilla sin empresa justo en la tabla cuyo duenio es la empresa.
+
+    El deduplicado sigue al mismo criterio: con `empresa_id` se compara
+    directo, sin el hay que pasar por `usuario` -- que es exactamente el parche
+    que FASE-CATEGORIA-S1 vino a sacar.
     """
     ahora = datetime.utcnow()
+    columnas = {c['name'] for c in sa.inspect(conn).get_columns('categoria')}
+    sentencia = (_SEMBRAR_VIA_EMPRESA if 'empresa_id' in columnas
+                 else _SEMBRAR_VIA_USUARIO)
     for nombre, tipo in CATEGORIAS_KORVO:
-        conn.execute(sa.text("""
-            INSERT INTO categoria (nombre, tipo, usuario_id, fecha_creacion)
-            SELECT :nombre, :tipo, duenio.usuario_id, :ahora
-              FROM (SELECT empresa_id, MIN(id) AS usuario_id
-                      FROM usuario
-                     GROUP BY empresa_id) AS duenio
-             WHERE NOT EXISTS (
-                     SELECT 1
-                       FROM categoria c
-                       JOIN usuario u ON u.id = c.usuario_id
-                      WHERE c.nombre = :nombre
-                        AND u.empresa_id = duenio.empresa_id)
-        """), {'nombre': nombre, 'tipo': tipo, 'ahora': ahora})
+        conn.execute(sa.text(sentencia),
+                     {'nombre': nombre, 'tipo': tipo, 'ahora': ahora})
 
 
 def _backfill(conn, tabla, fase):

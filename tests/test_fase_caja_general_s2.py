@@ -178,10 +178,10 @@ class BaseCaja(unittest.TestCase):
         return self.get(usuario_id, ruta).get_data(as_text=True)
 
     def categoria_id(self, nombre):
+        # Por empresa_id directo desde FASE-CATEGORIA-S1: el join a usuario que
+        # habia aca era el mismo parche que tenia app.py, y se fue con el.
         return (Categoria.query
-                .join(Usuario, Categoria.usuario_id == Usuario.id)
-                .filter(Usuario.empresa_id == self.empresa_id,
-                        Categoria.nombre == nombre)
+                .filter_by(empresa_id=self.empresa_id, nombre=nombre)
                 .one().id)
 
     def cargar_gasto(self, usuario_id, descripcion, monto, fecha,
@@ -340,6 +340,7 @@ class TestValidacionDeIngreso(BaseCaja):
 
     def test_ingreso_con_categoria_de_otra_empresa_no_entra(self):
         ajena = Categoria(nombre='Ajena', tipo='ingreso',
+                          empresa_id=self.otra_empresa_id,
                           usuario_id=self.ajeno_id)
         db.session.add(ajena)
         db.session.commit()
@@ -533,22 +534,17 @@ class TestBorrarLaCuentaNoBorraLaCaja(BaseCaja):
         self.assertIn('Regalo y Sorteo Homo',
                       self.texto_de(self.roman_id, '/caja-general'))
 
-    def test_las_categorias_sobreviven_reasignadas(self):
-        """Las siete Korvo cuelgan de UN usuario. Si esa cuenta se borra, la
-        empresa no puede quedarse sin vocabulario."""
+    def test_las_categorias_sobreviven_al_borrado(self):
+        """Antes se REASIGNABAN a un heredero; desde FASE-CATEGORIA-S1 no hace
+        falta tocarlas, porque el duenio es la empresa. Lo que importa es lo
+        mismo de siempre: la empresa no se queda sin vocabulario."""
         duenio = db.session.get(
             Categoria, self.categoria_id('Publicidad')).usuario_id
-        sobreviviente = (self.nachi_id if duenio == self.roman_id
-                         else self.roman_id)
 
         self.post(duenio, '/cuenta/eliminar')
 
-        categorias = (Categoria.query
-                      .join(Usuario, Categoria.usuario_id == Usuario.id)
-                      .filter(Usuario.empresa_id == self.empresa_id)
-                      .all())
+        categorias = Categoria.query.filter_by(empresa_id=self.empresa_id).all()
         self.assertEqual(len(categorias), len(MIGRACION.CATEGORIAS_KORVO))
-        self.assertTrue(all(c.usuario_id == sobreviviente for c in categorias))
 
 
 # =========================================================================
@@ -563,8 +559,7 @@ class TestCategoriasKorvo(BaseCaja):
 
         for empresa_id in (self.empresa_id, self.otra_empresa_id):
             cargadas = {c.nombre for c in Categoria.query
-                        .join(Usuario, Categoria.usuario_id == Usuario.id)
-                        .filter(Usuario.empresa_id == empresa_id).all()}
+                        .filter_by(empresa_id=empresa_id).all()}
             self.assertEqual(cargadas, esperadas,
                              'a la empresa %d le faltan categorias: %s'
                              % (empresa_id, esperadas - cargadas))
@@ -592,7 +587,7 @@ class TestCategoriasKorvo(BaseCaja):
                          'una fila por empresa, y hay dos empresas')
 
     def test_las_ve_el_socio_que_no_las_sembro(self):
-        """Cuelgan de un usuario, pero el combo las busca por empresa."""
+        """La semilla la crea UN usuario, pero la categoria es de la empresa."""
         self.assertIn('Publicidad', self.texto_de(self.nachi_id, '/gasto/nuevo'))
         self.assertIn('Publicidad',
                       self.texto_de(self.nachi_id, '/categorias'))

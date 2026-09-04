@@ -121,8 +121,11 @@ class BaseEva(unittest.TestCase):
         db.session.commit()
 
         self.categoria_gasto = Categoria(nombre='Compra de mercadería',
-                                         tipo='gasto', usuario_id=self.roman.id)
+                                         tipo='gasto',
+                                         empresa_id=self.empresa.id,
+                                         usuario_id=self.roman.id)
         self.categoria_ingreso = Categoria(nombre='Venta', tipo='ingreso',
+                                           empresa_id=self.empresa.id,
                                            usuario_id=self.roman.id)
         db.session.add_all([self.categoria_gasto, self.categoria_ingreso])
         db.session.commit()
