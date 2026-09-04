@@ -5,7 +5,7 @@ from models import db, Usuario, Categoria, Gasto, Ingreso, Empresa, Historial
 # `registrar_cambio` YA NO se importa de aca: la version de eva_utils usaba
 # nombres de columna que no existen y nunca fallo solo porque el `def` de
 # app.py:723 la pisaba. Se borro alla; la unica que queda es la de mas abajo.
-from eva_utils import generar_analisis_completo
+from eva_utils import dias_de_operacion, generar_analisis_completo
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from flask_mail import Mail, Message
@@ -505,8 +505,19 @@ def dashboard():
     # asi que convertimos los totales Decimal en el borde para no mezclar tipos.
     total_gastos = float(sum(g.monto for g in gastos))
     total_ingresos = float(sum(i.monto for i in ingresos))
-    
-    analisis = generar_analisis_completo(total_ingresos, total_gastos, config)
+
+    # FASE-EVA-S3: sobre cuantos dias se estan sumando esos dos totales.
+    #
+    # Es el MIN(fecha) de las dos tablas, y sale de las listas que ya estan en
+    # memoria dos lineas mas arriba: hacerlo con un SELECT MIN aparte serian dos
+    # consultas nuevas para releer filas que ya trajimos. `dias_de_operacion`
+    # devuelve None si no hay ninguna, que es el caso que el estado neutral de
+    # S2 ya cubre.
+    fechas = [g.fecha for g in gastos] + [i.fecha for i in ingresos]
+    dias = dias_de_operacion(min(fechas) if fechas else None)
+
+    analisis = generar_analisis_completo(total_ingresos, total_gastos, config,
+                                         dias)
     gastos_cat = gastos_por_categoria(gastos)
     ingresos_cat = ingresos_por_categoria(ingresos)
     

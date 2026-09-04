@@ -30,9 +30,15 @@
 #   en vez de restar los impuestos aparte, misma cuenta). Dos formulas para un
 #   solo numero es una invitacion a que se separen.
 
+from datetime import date
+
 # Que clase CSS lleva un indicador que no se pudo calcular. El dashboard la
 # pinta en gris, no en rojo: no saber no es una mala noticia.
 CLASE_NEUTRAL = 'neutral'
+
+# Cuantos dias tiene el anio al que se refiere `tasa_costo_capital`. La tasa es
+# ANUAL: este es el denominador que la baja al periodo que de verdad se midio.
+DIAS_DEL_ANIO = 365
 
 
 def calcular_margen_ganancia(ingresos_totales, gastos_totales):
@@ -104,7 +110,33 @@ def evaluar_indicador(valor, umbral_min, umbral_max=None, falta=None):
     return 'malo', '❌ Mal'
 
 
-def generar_analisis_completo(ingresos_totales, gastos_totales, config):
+def dias_de_operacion(fecha_primer_movimiento, hoy=None):
+    """Cuantos dias de operacion cubre el periodo que el dashboard esta sumando.
+
+    DE DONDE SALE EL ARRANQUE (FASE-EVA-S3, Parte 1)
+
+    De la fecha del primer movimiento real de la empresa: MIN(fecha) entre
+    `gasto` e `ingreso`. No hay hoy en el modelo ningun campo de "inicio de
+    operaciones" -- `Empresa.fecha_creacion` es cuando se dio de alta la cuenta
+    en este sistema, que no es lo mismo: Korvo cargo movimientos anteriores a
+    tener la cuenta, y contra ese campo el periodo saldria mas corto de lo que
+    fue. Usar el primer movimiento no inventa ningun campo nuevo y describe
+    exactamente el mismo rango de filas que el dashboard esta sumando.
+
+    Devuelve None cuando no hay un solo movimiento: no hay periodo que medir, y
+    ese caso ya lo cubre el estado neutral de FASE-EVA-S2.
+
+    El minimo de 1 dia es el guard de division por cero del dia que se carga el
+    primer dato -- y tambien cubre una fecha futura tipeada a mano, que daria
+    negativo y le devolveria plata a la empresa en vez de cobrarle.
+    """
+    if fecha_primer_movimiento is None:
+        return None
+    return max(1, ((hoy or date.today()) - fecha_primer_movimiento).days)
+
+
+def generar_analisis_completo(ingresos_totales, gastos_totales, config,
+                              dias_transcurridos=DIAS_DEL_ANIO):
     """Analisis financiero del dashboard.
 
     QUE CAMBIO EN FASE-EVA-S2
@@ -125,19 +157,46 @@ def generar_analisis_completo(ingresos_totales, gastos_totales, config):
         costo_capital  = capital_invertido * (tasa_costo_capital / 100)
         EVA            = utilidad_neta - costo_capital
 
-    LO QUE SIGUE PENDIENTE (no es de esta slice)
+    QUE CAMBIO EN FASE-EVA-S3
 
-    `costo_capital` sale de una tasa ANUAL, pero el dashboard suma ingresos y
-    gastos de toda la vida de la empresa, sin filtro de fecha (ver app.py:493).
-    A los tres meses de operar le cobra un anio entero de costo de capital. La
-    resta no cierra dimensionalmente y ningun estado neutral lo arregla: hace
-    falta acotar el periodo, que es una slice aparte.
+    Lo que S2 dejo anotado como pendiente: `costo_capital` salia de una tasa
+    ANUAL y se restaba entero, mientras que `ingresos_totales` y
+    `gastos_totales` son la suma de toda la vida de la empresa sin filtro de
+    fecha (app.py:493). A los tres meses de operar le cobraba un anio entero de
+    costo de capital: la resta no cerraba dimensionalmente y el EVA salia mucho
+    mas negativo de lo que era.
+
+    Ahora la tasa se prorratea al periodo que de verdad se esta sumando:
+
+        costo_capital = capital * (tasa / 100) * (dias_transcurridos / 365)
+
+    `dias_transcurridos` lo calcula `dias_de_operacion()` a partir del primer
+    movimiento de la empresa. El default de 365 NO es un valor inventado: es el
+    supuesto viejo escrito donde se ve. Con un periodo de exactamente un anio la
+    cuenta da identica a la de antes, que es la unica forma de saber que el fix
+    solo cambia el caso que estaba mal.
+
+    QUE NO CAMBIO
+
+    El resto de la formula:
+
+        utilidad_bruta = ingresos - gastos
+        utilidad_neta  = utilidad_bruta - utilidad_bruta * tasa_impuestos
+        EVA            = utilidad_neta - costo_capital
     """
     utilidad_bruta = ingresos_totales - gastos_totales
     impuestos = utilidad_bruta * config.tasa_impuestos
     utilidad_neta = utilidad_bruta - impuestos
 
-    costo_capital = config.capital_invertido * (config.tasa_costo_capital / 100)
+    # None = no hay ningun movimiento del cual medir el periodo. Se cae al
+    # supuesto viejo en vez de partir la funcion en dos: sin movimientos el EVA
+    # queda en None mas abajo igual, asi que este numero no llega a pantalla.
+    dias = (DIAS_DEL_ANIO if dias_transcurridos is None
+            else max(1, int(dias_transcurridos)))
+
+    costo_capital = (config.capital_invertido
+                     * (config.tasa_costo_capital / 100)
+                     * (dias / DIAS_DEL_ANIO))
 
     # Las dos condiciones que deciden que se puede calcular y que no.
     #
@@ -180,6 +239,11 @@ def generar_analisis_completo(ingresos_totales, gastos_totales, config):
         "utilidad_neta": utilidad_neta,
         "eva": eva,
         "costo_capital": costo_capital,
+        # Sobre que periodo se prorrateo el costo de capital. La plantilla lo
+        # muestra debajo del EVA: sin esto el numero vuelve a ser opaco -- nadie
+        # puede saber si "$-9000" es de un trimestre o de tres anios.
+        "dias_transcurridos": dias,
+        "periodo_conocido": dias_transcurridos is not None,
         # Las lee la plantilla para decidir si muestra un numero o un guion.
         "hay_movimiento": hay_movimiento,
         "hay_capital": hay_capital,

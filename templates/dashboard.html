@@ -353,6 +353,15 @@
             color: #a0a0a0;
         }
 
+        /* FASE-EVA-S3: la nota al pie del card de EVA. Chica y gris a
+           proposito: explica el numero de arriba, no compite con el. */
+        .eva-periodo {
+            margin-top: 8px;
+            font-size: 0.75rem;
+            line-height: 1.35;
+            color: #a0a0a0;
+        }
+
         /* EVA */
         .eva-container {
             background: #1a1a1a;
@@ -753,6 +762,19 @@
                 <h3>EVA - Valor Económico Agregado</h3>
                 <div class="value">{% if analisis.eva is none %}—{% else %}${{ "%.0f"|format(analisis.eva) }}{% endif %}</div>
                 <div class="eva-status" style="margin-top: 5px;">{{ analisis.eva_estado[1] }}</div>
+                {# FASE-EVA-S3: sobre que periodo se prorrateo el costo de
+                   capital. La tasa que se carga en Configuracion es ANUAL y
+                   aca se cobra la fraccion que corresponde a los dias que la
+                   empresa lleva operando -- sin esta linea el EVA vuelve a ser
+                   un numero del que nadie puede reconstruir la cuenta. Solo se
+                   muestra cuando hay un EVA que explicar. #}
+                {% if analisis.eva is not none and analisis.periodo_conocido %}
+                    <div class="eva-periodo">
+                        Costo de capital calculado sobre {{ analisis.dias_transcurridos }}
+                        {{ 'día' if analisis.dias_transcurridos == 1 else 'días' }} de operación
+                        (${{ "%.0f"|format(analisis.costo_capital) }})
+                    </div>
+                {% endif %}
             </div>
         </div>
         

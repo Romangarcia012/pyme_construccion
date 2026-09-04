@@ -40,7 +40,7 @@ productiva no se toca.
 import os
 import sys
 import unittest
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -167,13 +167,24 @@ class BaseEva(unittest.TestCase):
         return self.get(usuario_id, ruta).get_data(as_text=True)
 
     def cargar_movimientos(self, ingreso, gasto):
+        """Dos movimientos fechados hace EXACTAMENTE un anio.
+
+        La fecha era `date(2026, 8, 1)`, fija. Desde FASE-EVA-S3 el costo de
+        capital se prorratea al periodo que va desde el primer movimiento hasta
+        hoy, asi que una fecha fija haria que los numeros congelados de
+        `test_dashboard_con_datos_reales_si_calcula` cambiaran solos con cada
+        dia que pasa. Un anio exacto los deja identicos a los de antes de la
+        slice -- que es justamente el caso en el que el supuesto viejo (cobrar
+        la tasa anual entera) era correcto.
+        """
+        hace_un_anio = date.today() - timedelta(days=365)
         db.session.add(Ingreso(descripcion='Venta de prueba',
-                               monto=Decimal(ingreso), fecha=date(2026, 8, 1),
+                               monto=Decimal(ingreso), fecha=hace_un_anio,
                                empresa_id=self.empresa_id,
                                usuario_id=self.roman_id,
                                categoria_id=self.cat_ingreso_id))
         db.session.add(Gasto(descripcion='Compra de prueba',
-                             monto=Decimal(gasto), fecha=date(2026, 8, 1),
+                             monto=Decimal(gasto), fecha=hace_un_anio,
                              empresa_id=self.empresa_id,
                              usuario_id=self.roman_id,
                              categoria_id=self.cat_gasto_id))
