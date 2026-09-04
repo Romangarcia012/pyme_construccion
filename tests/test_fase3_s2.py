@@ -907,9 +907,15 @@ class TestPaginaIntegraciones(BaseSync):
         self.assertIn('Sincronizando', pagina)
 
     def test_el_canal_sin_conectar_no_ofrece_sincronizar(self):
-        """Mercado Libre no tiene ni conexion ni sync todavia."""
+        """Mercado Libre se conecta (FASE-MELI-S1) pero todavia no sincroniza.
+
+        Traer catalogo y pedidos de MeLi es S2/S3: hasta entonces el canal
+        tiene boton de Conectar y ninguno de Sincronizar, que es lo que este
+        test protege -- un boton que dispara un backfill inexistente seria una
+        promesa que no cumple nadie.
+        """
         pagina = self.client.get('/integraciones').get_data(as_text=True)
-        self.assertIn('Próximamente', pagina)
+        self.assertIn('/integraciones/mercadolibre/conectar', pagina)
         self.assertEqual(pagina.count('Sincronizar ahora'), 1)
 
 

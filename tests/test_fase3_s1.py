@@ -361,9 +361,11 @@ class TestPaginaIntegraciones(BaseWeb):
         self.assertIn('Tiendanube', pagina)
         self.assertIn('Mercado Libre', pagina)
         self.assertIn('Sin conectar', pagina)
-        # Tiendanube tiene boton; Mercado Libre todavia no.
+        # Los dos tienen boton de conectar. Mercado Libre no lo tenia hasta
+        # FASE-MELI-S1, que le sumo su propio OAuth; antes de eso esta linea
+        # esperaba "Próximamente".
         self.assertIn('/integraciones/tiendanube/conectar', pagina)
-        self.assertIn('Próximamente', pagina)
+        self.assertIn('/integraciones/mercadolibre/conectar', pagina)
 
     def test_muestra_la_cuenta_cuando_el_canal_esta_conectado(self):
         canal = self.canal_tiendanube()

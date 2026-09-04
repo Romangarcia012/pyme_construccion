@@ -3,6 +3,8 @@
 FASE3-S1: conectar la tienda de Tiendanube y guardar el token cifrado (OAuth).
 FASE3-S2: disparar el backfill de productos y pedidos y mostrar como salio.
 FASE-MP-S1: conectar las dos cuentas de Mercado Pago y traer sus movimientos.
+FASE-MELI-S1: conectar el canal de Mercado Libre (OAuth con state, token que
+               vence a las 6 horas y refresh_token de un solo uso).
 FASE-SYNC-CRON-S2: disparar ese mismo backfill desde un cron externo, con
                un token en header en vez de sesion.
 
@@ -31,8 +33,10 @@ from flask import (
 )
 from flask_login import current_user, login_required
 
+import credencial_mercadolibre as credencial_meli
 import cripto
 import ingestor_mercadopago as ingestor_mp
+import integracion_mercadolibre as meli
 import integracion_mercadopago as mp
 import integracion_tiendanube as tn
 import sync_mercadopago
@@ -48,6 +52,7 @@ from models import (
 integraciones_bp = Blueprint('integraciones', __name__, url_prefix='/integraciones')
 
 TIPO_TIENDANUBE = 'tiendanube'
+TIPO_MERCADOLIBRE = 'mercadolibre'
 
 # Canales que la UI muestra siempre, esten o no en la base. El endpoint es
 # None mientras el canal no tenga flujo de conexion implementado.
@@ -55,8 +60,11 @@ CANALES_CONOCIDOS = [
     {'tipo': TIPO_TIENDANUBE, 'nombre': 'Tiendanube',
      'endpoint_conectar': 'integraciones.conectar_tiendanube',
      'endpoint_sincronizar': 'integraciones.sincronizar_tiendanube'},
-    {'tipo': 'mercadolibre', 'nombre': 'Mercado Libre',
-     'endpoint_conectar': None,
+    # FASE-MELI-S1: ya tiene flujo de conexion. `endpoint_sincronizar` sigue en
+    # None a proposito: traer catalogo y pedidos es S2/S3, y hasta entonces un
+    # boton "Sincronizar" seria una promesa que no cumple nadie.
+    {'tipo': TIPO_MERCADOLIBRE, 'nombre': 'Mercado Libre',
+     'endpoint_conectar': 'integraciones.conectar_mercadolibre',
      'endpoint_sincronizar': None},
 ]
 
@@ -110,11 +118,21 @@ def listar():
             corriendo = sync_tiendanube.sync_en_curso(fila.id) is not None
             sync = sync_tiendanube.ultimo_sync(fila.id)
 
+        # FASE-MELI-S1: para Mercado Libre "activo" no alcanza como estado. El
+        # access_token vence cada seis horas, asi que un canal marcado activo
+        # puede estar sin acceso ahora mismo; la unica forma de saberlo es
+        # preguntar. `verificar_conexion` no levanta ni refresca: pintar una
+        # pagina no puede quemar el refresh_token de un solo uso.
+        conexion = None
+        if conocido['tipo'] == TIPO_MERCADOLIBRE and fila is not None and fila.activo:
+            conexion = credencial_meli.verificar_conexion(fila.id)
+
         canales.append({
             'tipo': conocido['tipo'],
             # Si esta conectado, el nombre guardado es el de la tienda real.
             'nombre': fila.nombre if fila else conocido['nombre'],
             'activo': bool(fila and fila.activo),
+            'conexion': conexion,
             'cuenta_externa': fila.id_tienda_externo if fila else None,
             'ultima_sync': fila.fecha_ultima_sync if fila else None,
             'endpoint_conectar': conocido['endpoint_conectar'],
@@ -589,4 +607,195 @@ def sincronizar_mercadopago(cuenta_cobro_id):
         return redirect(url_for('integraciones.listar'))
 
     flash(mensaje, 'success' if arranco else 'danger')
+    return redirect(url_for('integraciones.listar'))
+
+
+# ============================================================================
+# FASE-MELI-S1 - Canal de venta de Mercado Libre
+# ----------------------------------------------------------------------------
+# Mismo esqueleto que el OAuth de Mercado Pago -- state en la sesion, validado
+# en el callback, redirect_uri en las dos llamadas -- con dos diferencias que
+# vienen de la API y no de una decision de disenio:
+#
+#   1. El state aca es SOLO proteccion CSRF. En Mercado Pago ademas decide en
+#      cual de las dos cuentas de cobro se guarda el token; aca hay un unico
+#      canal de Mercado Libre por empresa (UNIQUE empresa_id+tipo en
+#      canal_venta), asi que lo unico que se guarda al lado del state es la
+#      empresa cuyo canal se estaba conectando.
+#
+#   2. Se guarda el refresh_token SI O SI. El access_token de Mercado Libre
+#      dura seis horas: sin refresh no hay integracion, hay una demo que
+#      funciona hasta la tarde. Si la respuesta no lo trae, la conexion se
+#      guarda igual (el token sirve seis horas) pero se avisa fuerte, porque
+#      significa que falto el scope offline_access.
+#
+# El vinculo canal_venta -> cuenta_cobro (canal 2 -> cuenta 41, la de Nachi) ya
+# existe y NO se toca aca: esto conecta la credencial, no reescribe a donde
+# entra la plata.
+# ============================================================================
+
+SESION_STATE_MELI = 'meli_oauth_state'
+SESION_EMPRESA_MELI = 'meli_oauth_empresa_id'
+
+
+def _redirect_uri_meli():
+    """El redirect_uri de las dos llamadas.
+
+    A diferencia de Mercado Pago no hay fallback a url_for(_external=True): el
+    de Mercado Libre tiene que coincidir caracter por caracter con el cargado
+    en el DevCenter, y un url_for detras del proxy de Render puede devolver
+    http:// y hacer fallar el canje con un invalid_grant que no explica nada.
+    El modulo de integracion ya trae el valor correcto por defecto.
+    """
+    return meli.redirect_uri_configurado()
+
+
+@integraciones_bp.route('/mercadolibre/conectar')
+@login_required
+def conectar_mercadolibre():
+    """Manda a la persona a autorizar la cuenta de Mercado Libre.
+
+    No escribe nada en la base: hasta que Mercado Libre no redirija al callback
+    con un code valido, para esta app no paso nada. Lo unico que queda es el
+    state en la sesion del navegador.
+    """
+    try:
+        # Se arma la URL ANTES de guardar el state: si falta el client_id, la
+        # sesion no queda con un state colgado.
+        state = secrets.token_urlsafe(32)
+        destino = meli.url_autorizacion(state, _redirect_uri_meli())
+    except meli.ErrorMercadoLibre as exc:
+        _log('no se pudo armar la autorizacion de Mercado Libre: %s' % (exc.detalle or exc))
+        flash(str(exc), 'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    session[SESION_STATE_MELI] = state
+    session[SESION_EMPRESA_MELI] = current_user.empresa_id
+    return redirect(destino)
+
+
+def _state_meli_valido():
+    """La empresa que se estaba conectando, si el state del callback es el que
+    quedo guardado en sesion. None si no coincide, si no hay ninguno, o si el
+    callback no trajo state.
+
+    Consume el state pase lo que pase: es de un solo uso. Sin eso, un code
+    viejo podria reusar el mismo state para escribir de nuevo.
+
+    Mercado Libre no valida este campo -- la doc lo dice con todas las letras:
+    "From Mercado Libre we do not validate this field". Es enteramente nuestro.
+    """
+    guardado = session.pop(SESION_STATE_MELI, None)
+    empresa_id = session.pop(SESION_EMPRESA_MELI, None)
+
+    recibido = request.args.get('state')
+    if not guardado or not recibido or empresa_id is None:
+        return None
+    # compare_digest y no ==: la comparacion de un token de sesion no tiene por
+    # que filtrar en cuantos caracteres coincidia.
+    if not secrets.compare_digest(str(guardado), str(recibido)):
+        return None
+    return empresa_id
+
+
+@integraciones_bp.route('/mercadolibre/callback')
+@login_required
+def callback_mercadolibre():
+    """Vuelta de Mercado Libre con ?code= y ?state=.
+
+    El state se valida PRIMERO. Si no coincide se corta ahi: no se canjea el
+    code y no se escribe nada.
+
+    Despues, el mismo orden que en Tiendanube y en Mercado Pago: las llamadas
+    HTTP que pueden fallar van ANTES de tocar la base, y la escritura es un
+    solo commit al final. No existe el estado "canal activo sin token" ni al
+    reves.
+
+    Se verifica el token contra /users/me antes de dar la conexion por buena,
+    igual que Tiendanube lo prueba contra /store: un token que canjea pero no
+    lee no sirve, y es mejor enterarse ahora que en la primera sincronizacion.
+    """
+    empresa_id = _state_meli_valido()
+    if empresa_id is None:
+        _log('callback de Mercado Libre con state invalido o ausente: se descarta')
+        flash('No se pudo validar la vuelta de Mercado Libre. Empezá la conexión '
+              'de nuevo desde el botón Conectar.', 'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    # El state prueba que el flujo lo empezo esta app; que lo haya empezado
+    # ESTE usuario es otra cosa. Sin este chequeo, un callback abierto en la
+    # sesion de otra empresa escribiria el token en el canal equivocado.
+    if empresa_id != current_user.empresa_id:
+        _log('callback de Mercado Libre para la empresa %s desde la sesion de la '
+             '%s: se descarta' % (empresa_id, current_user.empresa_id))
+        flash('No se pudo validar la vuelta de Mercado Libre. Empezá la conexión '
+              'de nuevo desde el botón Conectar.', 'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    if request.args.get('error'):
+        _log('Mercado Libre devolvio error en el callback: %s' % request.args.get('error'))
+        flash('No se completó la conexión con Mercado Libre: se canceló la autorización.',
+              'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    code = request.args.get('code')
+    if not code:
+        flash('Mercado Libre no devolvió el código de autorización. Probá conectar de nuevo.',
+              'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    try:
+        token = meli.intercambiar_code(code, _redirect_uri_meli())
+        usuario = meli.traer_usuario(token['access_token'])
+    except meli.ErrorMercadoLibre as exc:
+        _log('fallo la conexion con Mercado Libre: %s' % (exc.detalle or exc))
+        flash(str(exc), 'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    apodo = meli.apodo_de(usuario)
+
+    try:
+        canal = _canal(TIPO_MERCADOLIBRE, crear=True)
+        canal.id_tienda_externo = token['user_id']
+        canal.activo = True
+        # `canal.nombre` NO se pisa con el apodo de Mercado Libre. En Tiendanube
+        # el nombre de la tienda ES el del canal; aca el canal se llama "Mercado
+        # Libre" para todo el mundo y el apodo del vendedor es un dato de la
+        # cuenta, que ya se ve al lado del id. Tampoco se toca cuenta_cobro_id:
+        # a donde entra la plata lo decidio FASE-MP-S1 y esto es otra pregunta.
+
+        # Reconectar reutiliza la fila: un canal tiene una credencial vigente,
+        # no una pila historica de tokens viejos. Se pasa por el mismo lector
+        # que usa el refresco para que las dos puntas miren la misma fila.
+        credencial = credencial_meli.credencial_de(canal.id)
+        if credencial is None:
+            credencial = CredencialCanal(canal_id=canal.id, tipo_credencial='oauth2')
+            db.session.add(credencial)
+
+        credencial.access_token_cifrado = cripto.cifrar(token['access_token'])
+        # El refresh_token es tan sensible como el access_token (sirve para
+        # fabricar access_tokens nuevos), asi que va cifrado igual.
+        credencial.refresh_token_cifrado = cripto.cifrar(token['refresh_token'])
+        credencial.expira_en = token['expira_en']
+        credencial.scope = (token.get('scope') or None)
+        credencial.activo = True
+        credencial.fecha_actualizacion = datetime.utcnow()
+
+        db.session.commit()
+    except Exception as exc:
+        db.session.rollback()
+        _log('fallo guardando la credencial de Mercado Libre: %r' % (exc,))
+        flash('Se autorizó la cuenta pero no se pudo guardar la credencial. Probá de nuevo.',
+              'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    if not token['refresh_token']:
+        _log('Mercado Libre no devolvio refresh_token para el canal %s: revisar que '
+             'la URL de autorizacion pida el scope offline_access' % canal.id)
+        flash('Mercado Libre conectado como %s, pero sin permiso para renovar el '
+              'acceso: se va a cortar en unas horas. Avisá para revisar la '
+              'configuración de la aplicación.' % apodo, 'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    flash('Mercado Libre conectado: %s.' % apodo, 'success')
     return redirect(url_for('integraciones.listar'))

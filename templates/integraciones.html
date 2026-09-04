@@ -269,7 +269,23 @@
                         <tr>
                             <td>{{ canal.nombre }}</td>
                             <td>
-                                {% if canal.activo %}
+                                {# FASE-MELI-S1: para Mercado Libre "activo" no alcanza.
+                                   El access_token vence cada 6 horas, asi que el canal
+                                   puede estar marcado activo y no tener acceso ahora
+                                   mismo; `canal.conexion` trae el estado real, chequeado
+                                   contra /users/me. Los canales que no lo informan
+                                   (Tiendanube, cuyo token no vence) siguen como estaban. #}
+                                {% if canal.conexion is not none %}
+                                    {% if canal.conexion.conectado %}
+                                        <span class="estado-activo">Conectado</span>
+                                    {% else %}
+                                        <span class="estado-inactivo">
+                                            {% if canal.conexion.vencido %}Acceso vencido{% else %}Sin acceso{% endif %}
+                                        </span>
+                                        <br>
+                                        <span class="sync-mensaje">{{ canal.conexion.motivo }}</span>
+                                    {% endif %}
+                                {% elif canal.activo %}
                                     <span class="estado-activo">Conectado</span>
                                 {% else %}
                                     <span class="estado-inactivo">Sin conectar</span>
@@ -277,7 +293,10 @@
                             </td>
                             <td>
                                 {% if canal.activo %}
-                                    <span class="cuenta">{{ canal.nombre }}{% if canal.cuenta_externa %} (ID {{ canal.cuenta_externa }}){% endif %}</span>
+                                    {# El apodo sale de /users/me y solo lo hay si el
+                                       token todavia sirve; si no, se cae al nombre del
+                                       canal, que siempre esta. #}
+                                    <span class="cuenta">{{ (canal.conexion.usuario.nickname if canal.conexion and canal.conexion.usuario else none) or canal.nombre }}{% if canal.cuenta_externa %} (ID {{ canal.cuenta_externa }}){% endif %}</span>
                                 {% else %}
                                     <span class="cuenta">—</span>
                                 {% endif %}
