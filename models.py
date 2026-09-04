@@ -333,7 +333,12 @@ class CredencialCanal(db.Model):
     tipo_credencial = db.Column(db.String(30), nullable=False, default='oauth2')  # 'oauth2' | 'api_key'
     access_token_cifrado = db.Column(db.Text)
     refresh_token_cifrado = db.Column(db.Text)
-    scope = db.Column(db.String(255))
+    # Text y no String(255): el scope lo escribe el proveedor, no nosotros.
+    # Mercado Libre devuelve la lista de permisos concedidos y no cabe en 255;
+    # el callback reventaba con StringDataRightTruncation DESPUES de que la
+    # persona ya habia autorizado en la pantalla de MeLi. Un campo informativo
+    # de texto plano no puede ser el que decide si una integracion funciona.
+    scope = db.Column(db.Text)
     expira_en = db.Column(db.DateTime)
     activo = db.Column(db.Boolean, nullable=False, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
