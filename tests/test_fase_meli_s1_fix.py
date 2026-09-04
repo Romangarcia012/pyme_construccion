@@ -48,6 +48,7 @@ os.environ.setdefault('CREDENTIALS_ENCRYPTION_KEY',
                       'sO1mHTMYm4Rfy9ii1YV8dqmM1J4KrHnQPy_2xGx0nMk=')
 os.environ.setdefault('SECRET_KEY', 'clave-de-test')
 
+import credencial_mercadolibre as credencial_meli  # noqa: E402
 import cripto  # noqa: E402
 import integracion_mercadolibre as meli  # noqa: E402
 from app import app  # noqa: E402
@@ -258,6 +259,35 @@ class BaseWeb(unittest.TestCase):
             return self.client.get(
                 '/integraciones/mercadolibre/callback?code=code-valido&state=%s' % state)
 
+    def conectar_a_mano(self, access=ACCESS_MELI, refresh=REFRESH_MELI,
+                        scope=None, expira_en=None):
+        """Deja el canal conectado sin pasar por el OAuth, para los tests de
+        refresco."""
+        canal = self.canal()
+        canal.activo = True
+        canal.id_tienda_externo = USER_ID_MELI
+        credencial = CredencialCanal(
+            canal_id=canal.id,
+            tipo_credencial='oauth2',
+            access_token_cifrado=cripto.cifrar(access),
+            refresh_token_cifrado=cripto.cifrar(refresh),
+            scope=scope,
+            expira_en=(expira_en if expira_en is not None
+                       else datetime.utcnow() - timedelta(minutes=1)),
+            activo=True,
+        )
+        db.session.add(credencial)
+        db.session.commit()
+        return canal.id
+
+    def refrescar(self, canal_id, access=ACCESS_MELI, refresh=REFRESH_MELI,
+                  scope=SCOPE_LARGO):
+        with mock.patch.object(meli.requests, 'post',
+                               return_value=respuesta_token(access, refresh, scope)), \
+             mock.patch.dict(os.environ,
+                             {'MERCADOLIBRE_CLIENT_SECRET': SECRETO_FALSO}):
+            return credencial_meli.refrescar_token(canal_id)
+
 
 class TestCallbackNoTrunca(BaseWeb):
 
@@ -313,6 +343,62 @@ class TestCallbackNoTrunca(BaseWeb):
         self.assertEqual(cripto.descifrar(credencial.refresh_token_cifrado),
                          REFRESH_MELI)
         self.assertIsNotNone(credencial.expira_en)
+
+
+class TestRefreshNoTrunca(BaseWeb):
+    """FASE-MELI-S1-FIX2: el refresco guarda el mismo scope que el callback.
+
+    Mientras la columna fue varchar(255), el refresco cortaba el scope a mano
+    y el callback no. Con la columna en Text ese corte no protegia de nada y
+    dejaba las dos puntas guardando cosas distintas: reconectar daba el scope
+    entero, y el primer refresco automatico -- seis horas despues, sin nadie
+    mirando -- lo reemplazaba por uno mutilado.
+    """
+
+    def test_refresh_no_trunca_el_scope(self):
+        canal_id = self.conectar_a_mano()
+        self.assertGreater(len(SCOPE_LARGO), 255, 'el fixture perdio el sentido')
+
+        self.refrescar(canal_id, scope=SCOPE_LARGO)
+
+        from sqlalchemy import text
+        guardado, = db.session.execute(text(
+            'SELECT scope FROM credencial_canal')).one()
+
+        # Igualdad contra el string completo, no "empieza con": un corte a 255
+        # pasaria un assert de prefijo y tiene que fallar aca.
+        self.assertEqual(guardado, SCOPE_LARGO)
+        self.assertEqual(len(guardado), len(SCOPE_LARGO))
+
+    def test_el_refresco_deja_el_mismo_scope_que_el_callback(self):
+        """Las dos puntas escriben la misma columna: que escriban lo mismo.
+
+        Es la inconsistencia concreta que motivo la slice, comparada de punta
+        a punta en vez de afirmada.
+        """
+        self.callback(scope=SCOPE_LARGO)
+        scope_del_callback = CredencialCanal.query.one().scope
+
+        # El callback dejo el token vigente por tres horas; se vence a mano
+        # para que el refresco no se saltee por `solo_si_hace_falta`.
+        credencial = CredencialCanal.query.one()
+        credencial.expira_en = datetime.utcnow() - timedelta(minutes=1)
+        db.session.commit()
+
+        self.refrescar(self.canal().id, scope=SCOPE_LARGO)
+        scope_del_refresco = CredencialCanal.query.one().scope
+
+        self.assertEqual(scope_del_refresco, scope_del_callback)
+        self.assertEqual(scope_del_refresco, SCOPE_LARGO)
+
+    def test_si_meli_no_manda_scope_se_conserva_el_que_habia(self):
+        """Sacar el corte no cambia esta decision, que es previa y distinta:
+        un refresco sin scope no borra el que ya estaba guardado."""
+        canal_id = self.conectar_a_mano(scope=SCOPE_LARGO)
+
+        self.refrescar(canal_id, scope=None)
+
+        self.assertEqual(CredencialCanal.query.one().scope, SCOPE_LARGO)
 
 
 class TestNoRompeLoQueYaEstaba(BaseWeb):

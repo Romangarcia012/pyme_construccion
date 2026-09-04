@@ -162,8 +162,11 @@ def _refrescar_bajo_lock(canal_id, solo_si_hace_falta):
         _log('canal %s: el refresco no devolvio refresh_token nuevo; se conserva '
              'el anterior, que probablemente ya no sirva' % canal_id)
     credencial.expira_en = datos['expira_en']
+    # Entero, sin cortar: la columna es Text desde FASE-MELI-S1-FIX. El
+    # `[:255]` que habia aca sobrevivio a la migracion y solo servia para que
+    # el refresco guardara un scope distinto del que guarda el callback.
     if datos['scope']:
-        credencial.scope = datos['scope'][:255]
+        credencial.scope = datos['scope']
     credencial.activo = True
     credencial.fecha_actualizacion = datetime.utcnow()
 
