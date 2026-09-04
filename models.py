@@ -1,6 +1,7 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_login import UserMixin
 from werkzeug.security import generate_password_hash, check_password_hash
+from collections import OrderedDict
 from datetime import datetime
 
 db = SQLAlchemy()
@@ -417,6 +418,24 @@ class PedidoItem(db.Model):
     producto = db.relationship('Producto', backref='items_vendidos')
 
 
+# FASE-CAJA-SOCIO-S1: el vocabulario de socios, en un solo lugar.
+#
+# La clave es lo que se guarda en cuenta_cobro.socio y lo que se compara en
+# codigo; el valor es como se escribe en pantalla. Que sean dos cosas
+# distintas es justamente el punto: hasta ahora "de quien es esta cuenta" se
+# deducia leyendo cuenta_cobro.nombre ('Roman - Presencial y Tiendanube'), asi
+# que renombrar la cuenta -- un campo de texto libre, sin ninguna regla --
+# cambiaba en silencio a quien se le atribuia la facturacion. Con la clave
+# aparte, el nombre vuelve a ser lo que dice ser: una etiqueta.
+#
+# El orden importa: es el orden en que salen los socios en el reporte de caja,
+# y no depende de que cuenta se cargo primero ni de como se llame.
+SOCIOS = OrderedDict([
+    ('roman', 'Roman'),
+    ('nachi', 'Nachi'),
+])
+
+
 class CuentaCobro(db.Model):
     """Cuenta donde entra la plata: Mercado Pago o Tiendanube Pagos.
     metodo_ingesta queda restringido a 'api' (sin archivo ni carga manual)."""
@@ -430,6 +449,15 @@ class CuentaCobro(db.Model):
     # cuenta del lado del procesador. Se llama asi por simetria con
     # canal_venta.id_tienda_externo: "el id de esta cosa alla afuera".
     id_cuenta_externa = db.Column(db.String(100))
+    # FASE-CAJA-SOCIO-S1: de que socio es esta cuenta, con vocabulario fijo
+    # (ver SOCIOS). Reemplaza al parseo de `nombre`, que era texto libre.
+    #
+    # Nullable a proposito: una cuenta de cobro puede existir sin dueño
+    # asignado -- una cuenta de prueba, o una que se conecte antes de decidir
+    # de quien es. NULL significa "todavia no se dijo", y el reporte de caja lo
+    # muestra en su propia fila en vez de repartir esa plata entre los socios
+    # conocidos: plata sin dueño se ve, no se esconde.
+    socio = db.Column(db.String(20))
     moneda = db.Column(db.String(3), nullable=False, default='ARS')
     saldo_actual = db.Column(db.Numeric(14, 2), nullable=False, default=0)
     activo = db.Column(db.Boolean, nullable=False, default=True)
@@ -441,7 +469,32 @@ class CuentaCobro(db.Model):
     __table_args__ = (
         db.UniqueConstraint('empresa_id', 'nombre', name='uq_cuenta_cobro_empresa_nombre'),
         db.CheckConstraint("metodo_ingesta = 'api'", name='ck_cuenta_cobro_metodo_ingesta_api'),
+        # El mismo vocabulario que valida `_validar_socio`, pero del lado de la
+        # base. No es redundante: hoy las cuentas de cobro NO se cargan por
+        # ninguna pantalla, se siembran desde una migracion con SQL crudo
+        # (ver 14291f8d0459), y ese camino no pasa por el modelo. El CHECK es
+        # lo unico que cubre al unico camino de carga que existe.
+        db.CheckConstraint(
+            "socio IS NULL OR socio IN ('roman', 'nachi')",
+            name='ck_cuenta_cobro_socio_vocabulario'),
     )
+
+    @db.validates('socio')
+    def _validar_socio(self, clave, valor):
+        """El socio se escribe con una de las claves de SOCIOS, o no se escribe.
+
+        Un typo ('Roman', 'romn') no puede quedar guardado: la cuenta saldria
+        en su propia fila del reporte como si fuera un tercer socio, y nadie
+        se enteraria hasta cuadrar la plata a mano. Preferimos que reviente en
+        el momento de cargarla.
+        """
+        if valor is None or valor == '':
+            return None
+        if valor not in SOCIOS:
+            raise ValueError(
+                'socio invalido: %r. Los validos son %s.'
+                % (valor, ', '.join(SOCIOS)))
+        return valor
 
 
 class CredencialCuentaCobro(db.Model):

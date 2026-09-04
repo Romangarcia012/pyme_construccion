@@ -50,6 +50,11 @@ sin descomponer.
 Solo lee: no escribe una fila, no genera migracion, no toca el modelo.
 
 El blueprint se registra en app.py; ninguna ruta existente se toca.
+
+FASE-CAJA-SOCIO-S1 agrego una segunda pantalla en el mismo blueprint,
+/reportes/caja-socio, que contesta otra pregunta -- cuanto factura cada socio
+-- y no comparte ni una linea de calculo con esta. Su documentacion esta al
+pie del archivo, arriba de su propia ruta.
 """
 
 from collections import OrderedDict
@@ -60,7 +65,7 @@ from flask_login import current_user, login_required
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
-from models import Pedido
+from models import SOCIOS, CanalVenta, Pedido, db
 from rutas_productos import (
     ESTADOS_NO_VENDIDOS,
     ETIQUETA_SIN_IDENTIFICAR,
@@ -423,3 +428,161 @@ def margen():
                            incompletos=incompletos,
                            descuadres=descuadres,
                            total_pedidos=len(pedidos))
+
+
+# ==========================================================================
+# FASE-CAJA-SOCIO-S1 -- Cuanto factura cada socio
+# --------------------------------------------------------------------------
+# QUE ES Y QUE NO ES
+#
+# Esto NO es plata reconciliada contra Mercado Pago. Es FACTURACION: cuanto
+# deberia haber cobrado cada socio segun por que canal se vendio. La cuenta de
+# Roman cobra Tiendanube y las ventas presenciales, la de Nachi cobra Mercado
+# Libre. Si manana el Mercado Pago de alguno muestra otro numero, la diferencia
+# es un error de esa persona -- cobro por fuera, se olvido de cargar algo -- y
+# no algo que este reporte tenga que detectar. Por eso no toca ni necesita
+# CuentaCobro/Pago/Liquidacion/MovimientoCuenta: la cadena entera es
+# pedido -> canal -> cuenta de cobro -> socio, y termina ahi.
+#
+# POR QUE pedido.total Y NO ingreso_neto NI total_bruto
+#
+# La pregunta es "cuanta plata le entro a esta persona", y lo que le entra es
+# lo que el comprador pago: el producto, menos el descuento, mas el envio y los
+# impuestos. Eso es `total`, el mismo numero que el reporte de margen usa como
+# control (`_cierra`) y el que figura en el listado de ventas.
+#
+#   - total_bruto queda afuera porque es antes de descuentos y sin envio: nadie
+#     cobro nunca ese numero.
+#   - ingreso_neto queda afuera porque es una cuenta del reporte de MARGEN
+#     (bruto - descuentos + envio), armada para compararse contra costos. Ahi
+#     tiene sentido reconstruirla; aca lo que se quiere es el monto que se
+#     cobro, y ese ya esta guardado.
+#
+# DE DONDE SALE EL SOCIO
+#
+# De cuenta_cobro.socio, el campo de vocabulario fijo que agrega esta misma
+# slice. Antes habia que leer cuenta_cobro.nombre y adivinar: renombrar una
+# cuenta cambiaba la atribucion sin que nada avisara.
+#
+# LO QUE NO SE OCULTA
+#
+#   - Un socio sin ventas sale igual, en cero, con sus canales listados. Hoy le
+#     pasa a Nachi: Mercado Libre esta apagado. Sacarlo de la pantalla haria
+#     ver un reparto de dos personas como si fuera de una sola.
+#   - Un canal cuya cuenta no tiene socio -- o que no tiene cuenta -- no se
+#     reparte entre los conocidos ni se descarta: cae en su propia fila. Plata
+#     sin dueño se ve.
+# ==========================================================================
+
+# Como se titula la fila de lo que no se le pudo atribuir a nadie. No es un
+# socio: es una pregunta abierta.
+ETIQUETA_SIN_SOCIO = 'Sin socio asignado'
+
+
+def _facturado_por_canal(empresa_id):
+    """{canal_id: suma de pedido.total}, con el mismo filtro de cancelados.
+
+    Un pedido cancelado no le entro a nadie. Se excluye con el mismo criterio
+    que el resto de los reportes (`ESTADOS_NO_VENDIDOS`), asi los numeros de
+    esta pantalla se pueden cruzar contra los de margen sin explicaciones.
+
+    Se suma en la base y no en Python a proposito: aca no hace falta abrir cada
+    pedido -- no hay costos, ni items, ni snapshots -- y traerlos todos para
+    sumar una columna serian miles de filas para llegar a dos numeros.
+    """
+    filas = (db.session.query(Pedido.canal_id,
+                              func.coalesce(func.sum(Pedido.total), 0))
+             .filter(Pedido.empresa_id == empresa_id)
+             .filter(func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS))
+             .group_by(Pedido.canal_id)
+             .all())
+    return {canal_id: _decimal(total) for canal_id, total in filas}
+
+
+def _pedidos_por_canal(empresa_id):
+    """{canal_id: cuantos pedidos}, mismo filtro. Es el respaldo del monto.
+
+    Sin el contador, un canal en cero no se distingue de un canal que vendio y
+    devolvio todo, y son dos situaciones muy distintas.
+    """
+    filas = (db.session.query(Pedido.canal_id, func.count(Pedido.id))
+             .filter(Pedido.empresa_id == empresa_id)
+             .filter(func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS))
+             .group_by(Pedido.canal_id)
+             .all())
+    return {canal_id: int(cantidad or 0) for canal_id, cantidad in filas}
+
+
+def _nuevo_socio(clave, nombre):
+    return {
+        'clave': clave,
+        'nombre': nombre,
+        'total': CERO,
+        'pedidos': 0,
+        'canales': [],
+    }
+
+
+@reportes_bp.route('/caja-socio')
+@login_required
+def caja_socio():
+    """Cuanto factura cada socio, y por que canal.
+
+    Una fila por socio con el desglose de sus canales debajo. Sin rango de
+    fechas: es el acumulado, igual que el resto de los reportes de la fase.
+    """
+    empresa_id = current_user.empresa_id
+
+    facturado = _facturado_por_canal(empresa_id)
+    contados = _pedidos_por_canal(empresa_id)
+
+    # Se parte de los CANALES, no de los pedidos: un canal que todavia no
+    # vendio nada tiene que aparecer igual (Mercado Libre hoy), y si el barrido
+    # empezara por los pedidos ese canal no existiria en la pantalla.
+    canales = (CanalVenta.query
+               .options(joinedload(CanalVenta.cuenta_cobro))
+               .filter(CanalVenta.empresa_id == empresa_id)
+               .order_by(CanalVenta.id)
+               .all())
+
+    # Los socios del vocabulario nacen todos, en cero y en su orden, antes de
+    # mirar una sola venta. Asi la pantalla no depende de que canales existan.
+    socios = OrderedDict((clave, _nuevo_socio(clave, nombre))
+                         for clave, nombre in SOCIOS.items())
+
+    for canal in canales:
+        cuenta = canal.cuenta_cobro
+        clave = cuenta.socio if cuenta is not None else None
+
+        grupo = socios.get(clave)
+        if grupo is None:
+            # Cae aca el canal sin cuenta de cobro y el que tiene una cuenta
+            # sin socio. Los dos casos van al mismo lugar porque la respuesta
+            # es la misma -- "no se sabe de quien es esta plata" -- y el
+            # detalle de cual de los dos es se lee en la columna de la cuenta.
+            grupo = socios.get(None)
+            if grupo is None:
+                grupo = _nuevo_socio(None, ETIQUETA_SIN_SOCIO)
+                socios[None] = grupo
+
+        total = facturado.get(canal.id, CERO)
+        pedidos = contados.get(canal.id, 0)
+
+        grupo['total'] += total
+        grupo['pedidos'] += pedidos
+        grupo['canales'].append({
+            'nombre': canal.nombre,
+            'tipo': canal.tipo,
+            'activo': canal.activo,
+            'cuenta': cuenta.nombre if cuenta is not None else None,
+            'total': total,
+            'pedidos': pedidos,
+        })
+
+    filas = list(socios.values())
+
+    return render_template('reportes_caja_socio.html',
+                           socios=filas,
+                           total_general=sum((fila['total'] for fila in filas),
+                                             CERO),
+                           pedidos_totales=sum(fila['pedidos'] for fila in filas))

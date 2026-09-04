@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Caja por socio</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container { max-width: 900px; margin: 0 auto; }
+
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        h1 { color: #fff; font-size: 28px; }
+        .subtitulo { color: #888; font-size: 14px; margin-top: 6px; }
+
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn-volver:hover { background: #555; }
+
+        .tabla-container {
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            overflow-x: auto;
+        }
+
+        table { width: 100%; border-collapse: collapse; }
+
+        th {
+            background: #252525;
+            padding: 12px 15px;
+            text-align: left;
+            font-weight: 600;
+            color: #fff;
+            border-bottom: 1px solid #333;
+            white-space: nowrap;
+        }
+
+        td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #333;
+            vertical-align: middle;
+        }
+
+        .num { text-align: right; font-variant-numeric: tabular-nums; }
+        th.num { text-align: right; }
+
+        /* La fila del socio contra las de sus canales. El desglose va indentado
+           y en gris: se tiene que leer de una que son las partes de la de
+           arriba, no cuatro filas sueltas al mismo nivel. */
+        .socio td {
+            background: #202020;
+            border-top: 2px solid #333;
+            font-weight: 600;
+            color: #fff;
+            font-size: 16px;
+        }
+
+        .canal td {
+            color: #bbb;
+            font-size: 14px;
+            padding-top: 9px;
+            padding-bottom: 9px;
+        }
+        .canal td:first-child { padding-left: 34px; }
+
+        .detalle { color: #777; font-size: 12px; }
+
+        /* Un canal apagado no es un error ni un faltante: es una decision. Se
+           marca para que su cero se lea como "por ahi no vendimos todavia" y
+           no como "falta cargar algo". */
+        .apagado {
+            color: #888;
+            font-size: 11px;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            padding: 1px 6px;
+            margin-left: 6px;
+            white-space: nowrap;
+        }
+
+        /* Lo que no se le pudo atribuir a nadie. Amarillo, mismo criterio que
+           el reporte de margen: no esta roto, le falta que alguien decida. */
+        .aviso { color: #d6a441; }
+
+        .total-general td {
+            background: #252525;
+            border-top: 2px solid #444;
+            border-bottom: none;
+            font-weight: 600;
+            color: #fff;
+        }
+
+        .vacio { color: #888; padding: 30px; text-align: center; }
+
+        .aclaracion {
+            color: #777;
+            font-size: 13px;
+            margin-top: 15px;
+            line-height: 1.5;
+        }
+        .aclaracion a { color: #7aa7d6; }
+
+        @media (max-width: 768px) {
+            table { font-size: 14px; }
+            th, td { padding: 10px; }
+            .canal td:first-child { padding-left: 24px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('dashboard') }}" class="btn-volver">← Volver al Dashboard</a>
+
+        <div class="header">
+            <div>
+                <h1>Caja por socio</h1>
+                <p class="subtitulo">
+                    Cuánto facturó cada uno según por qué canal se vendió. Sobre
+                    {{ pedidos_totales }} pedido{{ '' if pedidos_totales == 1 else 's' }}
+                    (los cancelados no cuentan).
+                </p>
+            </div>
+        </div>
+
+        <div class="tabla-container">
+            {% if socios %}
+            <table>
+                <thead>
+                    <tr>
+                        <th>Socio / canal</th>
+                        <th>Cuenta de cobro</th>
+                        <th class="num">Pedidos</th>
+                        <th class="num">Facturado</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for socio in socios %}
+                    <tr class="socio">
+                        <td {% if socio.clave is none %}class="aviso"{% endif %}>
+                            {{ socio.nombre }}
+                        </td>
+                        <td></td>
+                        <td class="num">{{ socio.pedidos }}</td>
+                        <td class="num">{{ '%.2f'|format(socio.total) }}</td>
+                    </tr>
+                        {% for canal in socio.canales %}
+                        <tr class="canal">
+                            <td>
+                                {{ canal.nombre }}
+                                {% if not canal.activo %}<span class="apagado">canal apagado</span>{% endif %}
+                            </td>
+                            <td>
+                                {% if canal.cuenta %}
+                                    <span class="detalle">{{ canal.cuenta }}</span>
+                                {% else %}
+                                    <span class="detalle aviso">sin cuenta de cobro</span>
+                                {% endif %}
+                            </td>
+                            <td class="num">{{ canal.pedidos }}</td>
+                            <td class="num">{{ '%.2f'|format(canal.total) }}</td>
+                        </tr>
+                        {% else %}
+                        <tr class="canal">
+                            <td colspan="4"><span class="detalle">Ningún canal cobra en su cuenta.</span></td>
+                        </tr>
+                        {% endfor %}
+                    {% endfor %}
+                    <tr class="total-general">
+                        <td>Total facturado</td>
+                        <td></td>
+                        <td class="num">{{ pedidos_totales }}</td>
+                        <td class="num">{{ '%.2f'|format(total_general) }}</td>
+                    </tr>
+                </tbody>
+            </table>
+            {% else %}
+            <p class="vacio">Todavía no hay socios cargados.</p>
+            {% endif %}
+        </div>
+
+        <p class="aclaracion">
+            Esto es <strong>facturación</strong>, no plata conciliada: es lo que cada
+            uno tendría que haber cobrado según el canal por el que se vendió, no lo
+            que muestra su Mercado Pago. Si los dos números no coinciden, la diferencia
+            está del lado de la cuenta, no de este reporte.
+            El monto de cada pedido es su <strong>total</strong> —lo que pagó el
+            comprador, envío e impuestos incluidos—, el mismo que figura en
+            <a href="{{ url_for('ventas.listar_pedidos') }}">Ver Ventas</a>.
+            Un socio en cero con su canal apagado no es un dato que falte: es que por
+            ahí todavía no se vendió.
+        </p>
+    </div>
+</body>
+</html>
