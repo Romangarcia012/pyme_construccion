@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Nuevo producto</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container { max-width: 700px; margin: 0 auto; }
+
+        .header { margin-bottom: 30px; }
+        h1 { color: #fff; font-size: 28px; }
+        .subtitulo { color: #888; font-size: 14px; margin-top: 6px; }
+
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn-volver:hover { background: #555; }
+
+        .panel {
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .panel h2 {
+            font-size: 16px;
+            color: #fff;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            color: #aaa;
+            margin-bottom: 6px;
+        }
+
+        input[type="text"], input[type="number"] {
+            width: 100%;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 12px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+        input[type="text"]:focus, input[type="number"]:focus {
+            outline: none;
+            border-color: #777;
+        }
+
+        .campo { margin-bottom: 18px; }
+        .campo:last-child { margin-bottom: 0; }
+
+        .ayuda { color: #777; font-size: 12px; margin-top: 8px; line-height: 1.5; }
+
+        .sku-input { font-family: 'Consolas', monospace; }
+
+        /* Las dos opciones de stock son excluyentes y ninguna es el default:
+           por eso son dos bloques del mismo tamaño y no un checkbox con un
+           input al lado, que insinuaría que una de las dos es la normal. */
+        .opcion {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            border: 1px solid #333;
+            border-radius: 6px;
+            padding: 14px;
+            margin-bottom: 10px;
+            cursor: pointer;
+        }
+        .opcion:hover { border-color: #444; background: #1d1d1d; }
+        .opcion input[type="radio"] { margin-top: 3px; accent-color: #2d6a4f; }
+        .opcion .texto { flex: 1; }
+        .opcion .titulo { color: #e0e0e0; font-size: 14px; margin-bottom: 4px; }
+        .opcion .detalle { color: #777; font-size: 12px; line-height: 1.5; }
+
+        .stock-input {
+            width: 140px;
+            margin-top: 10px;
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .nota {
+            background: rgba(224, 168, 0, 0.07);
+            border-left: 3px solid #6b5500;
+            border-radius: 4px;
+            padding: 14px 16px;
+            color: #999;
+            font-size: 13px;
+            line-height: 1.6;
+        }
+        .nota strong { color: #ccc; font-weight: 600; }
+
+        .btn-guardar {
+            background: #2d6a4f;
+            color: #fff;
+            border: none;
+            padding: 12px 22px;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        .btn-guardar:hover { background: #35805e; }
+
+        .acciones { display: flex; align-items: center; gap: 15px; }
+        .acciones a { color: #888; font-size: 13px; text-decoration: none; }
+        .acciones a:hover { color: #aaa; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('productos.listar_stock') }}" class="btn-volver">← Volver al stock</a>
+
+        <div class="header">
+            <h1>Nuevo producto</h1>
+            <p class="subtitulo">Para lo que no está en Tiendanube: lo que todavía no subiste, o lo que sólo se vende en el mostrador</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div style="padding: 15px; margin-bottom: 20px; border-radius: 6px; border-left: 4px solid {% if category == 'success' %}#28a745{% elif category == 'warning' %}#e0a800{% else %}#dc3545{% endif %}; background: {% if category == 'success' %}rgba(40, 167, 69, 0.1){% elif category == 'warning' %}rgba(224, 168, 0, 0.1){% else %}rgba(220, 53, 69, 0.1){% endif %}; color: {% if category == 'success' %}#51cf66{% elif category == 'warning' %}#ffd43b{% else %}#ff6b6b{% endif %};">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        <form method="POST" action="{{ url_for('productos.nuevo_producto') }}">
+            <div class="panel">
+                <h2>Qué es</h2>
+
+                <div class="campo">
+                    <label for="sku">Código (SKU)</label>
+                    {# El value vuelve de `enviado` para que un error de otro campo
+                       no borre lo que ya estaba tipeado. #}
+                    <input type="text" id="sku" name="sku" class="sku-input"
+                           value="{{ enviado.sku or '' }}"
+                           placeholder="Ej: CINTA-19" autocomplete="off" maxlength="60">
+                    <p class="ayuda">
+                        Es el código con el que vas a buscar el producto cuando cargues una
+                        venta. No se puede repetir dentro de tu catálogo.
+                    </p>
+                </div>
+
+                <div class="campo">
+                    <label for="nombre">Nombre</label>
+                    <input type="text" id="nombre" name="nombre"
+                           value="{{ enviado.nombre or '' }}"
+                           placeholder="Ej: Cinta aisladora 19mm" autocomplete="off"
+                           maxlength="200">
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>Cuánto te cuesta</h2>
+
+                <div class="campo">
+                    <label for="costo_unitario">Costo unitario</label>
+                    <input type="text" id="costo_unitario" name="costo_unitario"
+                           value="{{ enviado.costo_unitario or '' }}"
+                           inputmode="decimal" placeholder="0.00" autocomplete="off">
+                    <p class="ayuda">
+                        Lo que te sale a vos, no lo que cobrás. Podés dejarlo vacío si
+                        todavía no lo sabés, pero las ventas que hagas mientras tanto van a
+                        quedar sin ganancia calculable: cada venta congela el costo del
+                        momento y cargarlo después no las corrige.
+                    </p>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>Stock</h2>
+
+                {# Ninguna de las dos viene marcada a propósito: "no queda ninguno" y
+                   "no llevo la cuenta" son cosas distintas en todo el sistema, y
+                   elegir un default por el usuario sería afirmar una de las dos. #}
+                <label class="opcion">
+                    <input type="radio" name="control_stock" value="no"
+                           {% if enviado.control_stock != 'si' and enviado.control_stock %}checked{% endif %}>
+                    <span class="texto">
+                        <span class="titulo">No llevo la cuenta de este stock</span>
+                        <span class="detalle">
+                            El producto se vende igual y las ventas no descuentan nada.
+                            Es lo que corresponde para algo que no contás por unidad.
+                        </span>
+                    </span>
+                </label>
+
+                <label class="opcion">
+                    <input type="radio" name="control_stock" value="si"
+                           {% if enviado.control_stock == 'si' %}checked{% endif %}>
+                    <span class="texto">
+                        <span class="titulo">Llevo la cuenta: tengo esta cantidad</span>
+                        <span class="detalle">
+                            Cada venta lo descuenta. Cero es un valor válido y significa
+                            que llevás la cuenta y no queda ninguno.
+                        </span>
+                        <input type="number" name="stock" class="stock-input"
+                               value="{{ enviado.stock or '' }}"
+                               min="0" step="1" placeholder="0"
+                               aria-label="Cantidad en stock">
+                    </span>
+                </label>
+            </div>
+
+            <div class="panel">
+                <p class="nota">
+                    <strong>Si algún día subís este mismo código a Tiendanube</strong>, la
+                    sincronización va a reconocerlo como el mismo producto y los va a
+                    fusionar en vez de duplicarlos. A partir de ahí manda Tiendanube: te
+                    va a pisar el nombre, el stock y si está activo o no. El costo
+                    unitario no se toca nunca: ése queda como lo cargues acá.
+                </p>
+            </div>
+
+            <div class="acciones">
+                <button type="submit" class="btn-guardar">Guardar producto</button>
+                <a href="{{ url_for('productos.listar_stock') }}">Cancelar</a>
+            </div>
+        </form>
+    </div>
+</body>
+</html>

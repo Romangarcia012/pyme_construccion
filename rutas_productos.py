@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """Pantallas de producto: listado de stock (FASE-STOCK-S1), carga del costo
-(FASE-REPORTES-S3-COSTO) y resumen de vendido por canal y color
-(FASE-REPORTES-S1).
+(FASE-REPORTES-S3-COSTO), alta manual (FASE-PRODUCTOS-S2) y resumen de
+vendido por canal y color (FASE-REPORTES-S1).
 
 Hasta ahora `producto.stock` solo se veia entrando a Supabase: lo escribia el
 resync de Tiendanube (FASE3-S3) y tambien lo descuenta la venta presencial
@@ -18,6 +18,11 @@ caso opuesto al del stock: Tiendanube no lo sabe y ningun sync lo pisa (ver
 el unico modo de que exista es que alguien lo escriba. Sin el, el margen de
 cada venta es NULL y no hay reporte de rentabilidad posible.
 
+Lo que se puede CREAR, desde FASE-PRODUCTOS-S2, es el producto entero. Hasta
+ahi el catalogo solo lo llenaba el sync, asi que algo que todavia no esta en
+Tiendanube -- o que nunca va a estarlo -- no se podia vender. El alta no crea
+mapeo a ningun canal y no toca `_upsert_producto`; ver el bloque de la ruta.
+
 El blueprint se registra en app.py; ninguna ruta existente se toca.
 """
 
@@ -27,6 +32,7 @@ from decimal import Decimal, InvalidOperation
 from flask import Blueprint, flash, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
 from sqlalchemy import func
+from sqlalchemy.exc import IntegrityError
 
 from ingestor_tiendanube import a_decimal
 from models import (
@@ -289,6 +295,192 @@ def guardar_costos():
               % (len(cambios), '' if len(cambios) == 1 else 's'), 'success')
     else:
         flash('No hubo cambios que guardar.', 'warning')
+    return redirect(url_for('productos.listar_stock'))
+
+
+# --------------------------------------------------------------------------
+# FASE-PRODUCTOS-S2: cargar un producto a mano
+# --------------------------------------------------------------------------
+# Hasta esta slice `Producto` nacia en un solo lugar: `sync_tiendanube`
+# (`_upsert_producto`), durante el sync. O sea que un producto que todavia no
+# esta publicado en Tiendanube -- o que nunca va a estarlo, porque se vende
+# solo en el mostrador -- no se podia vender: la venta manual elige de un
+# catalogo que solo el sync sabia llenar. La pantalla de venta ya prometia esta
+# salida ("carga productos antes de registrar una venta") y no habia adonde ir.
+#
+# Este camino es NUEVO y PARALELO: no toca `_upsert_producto` ni el sync.
+#
+# Lo que NO hace, a proposito: no crea `MapeoProductoCanal`. Un producto
+# cargado a mano no existe en ningun canal externo, y un mapeo inventado seria
+# una traduccion hacia un id que no esta del otro lado. Nada del sistema lo
+# necesita -- el listado lo muestra sin canal, los dos reportes que agrupan por
+# id externo le dan su propio grupo (`_clave_de_grupo`), y el push de stock a
+# Tiendanube lo saltea explicitamente (`stock_tiendanube.empujar_stock`).
+#
+# Tampoco pide `precio_lista`: la venta manual tipea el precio en cada linea,
+# porque el precio real del mostrador no es el de lista.
+#
+# EL SKU QUE SE REPITE CON TIENDANUBE
+#
+# `_upsert_producto` busca por `(empresa_id, sku)`. Si alguien carga aca un
+# producto y despues sube a Tiendanube uno con el mismo SKU, el sync va a
+# encontrar este y lo va a ADOPTAR: le crea el mapeo y le pisa nombre, activo y
+# stock. Eso es lo que corresponde -- fusiona en vez de duplicar -- y por eso
+# no se prefijan los SKU manuales ni se marca el origen del producto. Lo unico
+# que hay que saber es que el stock cargado aca dura hasta ese dia, y la
+# pantalla lo dice. `costo_unitario` sobrevive: el sync lo protege.
+
+# Los largos son los del modelo. Se validan aca y no solo contra la base porque
+# SQLite no los hace cumplir (los tests pasarian) y Postgres si: en Supabase el
+# error saltaria recien en el commit, contra un formulario ya enviado.
+LARGO_SKU = 60
+LARGO_NOMBRE = 200
+
+# El valor del radio que enciende el control de stock. El otro estado no tiene
+# constante porque es "cualquier otra cosa": si el formulario llega sin el
+# campo, lo que corresponde es NULL, no un cero inventado.
+CONTROLA_STOCK = 'si'
+
+MENSAJE_SKU_REPETIDO = ('Ya existe un producto con el codigo "%s" en tu catalogo. '
+                        'Los codigos no se repiten: elegi otro.')
+
+
+class ProductoInvalido(Exception):
+    """Lo que vino en el formulario de alta no alcanza para crear el producto.
+
+    Igual que `CostoInvalido`, el mensaje se le muestra a quien lo estaba
+    cargando: se escribe en criollo y nombra el campo."""
+
+
+def _leer_texto(valor, campo, largo):
+    """Un campo de texto obligatorio, con el largo que aguanta la columna."""
+    if not valor:
+        raise ProductoInvalido('Falta el %s del producto.' % campo)
+    if len(valor) > largo:
+        raise ProductoInvalido('El %s no puede tener mas de %d caracteres.'
+                               % (campo, largo))
+    return valor
+
+
+def _leer_stock(eleccion, texto):
+    """La eleccion del formulario -> el entero, o None si no se lleva la cuenta.
+
+    None y 0 son dos estados distintos, y por eso el formulario los pregunta
+    aparte en vez de deducirlos de un input vacio:
+
+        None -> nadie lleva la cuenta de este producto. La venta no lo
+                descuenta (`rutas_ventas._descontar_stock`), el listado dice
+                "sin control de stock" y el total del grupo tampoco lo cuenta
+                (`_sumar_stock`).
+        0    -> se lleva la cuenta y no queda ninguno. El listado lo marca en
+                rojo porque frena una venta.
+
+    Deducirlo de un input vacio obligaria a elegir uno de los dos como default,
+    y los dos serian una afirmacion que nadie hizo.
+    """
+    if eleccion != CONTROLA_STOCK:
+        return None
+
+    texto = (texto or '').strip()
+    if not texto:
+        raise ProductoInvalido(
+            'Dijiste que llevas la cuenta del stock, pero no pusiste cuantos '
+            'hay. Si no la llevas, elegi la otra opcion.')
+    try:
+        stock = int(texto)
+    except ValueError:
+        raise ProductoInvalido('El stock tiene que ser un numero entero.')
+    if stock < 0:
+        raise ProductoInvalido('El stock no puede ser negativo.')
+    return stock
+
+
+def _verificar_sku_libre(sku):
+    """El SKU es la identidad del producto y es unico por empresa.
+
+    Se pregunta ANTES de insertar para poder contestar con un mensaje, en vez
+    de dejar que la UNIQUE de la base tire un IntegrityError contra un
+    formulario ya enviado. El `except IntegrityError` de la ruta sigue estando
+    igual: entre esta consulta y el commit hay lugar para que entre otra alta
+    del mismo SKU, y esa carrera tiene que terminar en el mismo aviso y no en
+    un 500.
+    """
+    repetido = Producto.query.filter_by(
+        empresa_id=current_user.empresa_id, sku=sku).first()
+    if repetido is not None:
+        raise ProductoInvalido(MENSAJE_SKU_REPETIDO % sku)
+
+
+@productos_bp.route('/nuevo', methods=['GET', 'POST'])
+@login_required
+def nuevo_producto():
+    """Alta de un producto que no vino de ningun canal."""
+    if request.method == 'GET':
+        return render_template('producto_nuevo.html', enviado={})
+
+    enviado = {
+        'sku': (request.form.get('sku') or '').strip(),
+        'nombre': (request.form.get('nombre') or '').strip(),
+        'costo_unitario': (request.form.get('costo_unitario') or '').strip(),
+        'control_stock': (request.form.get('control_stock') or '').strip(),
+        'stock': (request.form.get('stock') or '').strip(),
+    }
+
+    try:
+        sku = _leer_texto(enviado['sku'], 'codigo (SKU)', LARGO_SKU)
+        nombre = _leer_texto(enviado['nombre'], 'nombre', LARGO_NOMBRE)
+        # Se reusa el lector del formulario de costos: mismo criterio para la
+        # coma decimal, el vacio y el negativo, asi el costo se escribe igual
+        # en las dos pantallas.
+        costo = _leer_costo(enviado['costo_unitario'], nombre)
+        stock = _leer_stock(enviado['control_stock'], enviado['stock'])
+        _verificar_sku_libre(sku)
+
+        # `moneda` y `activo` no se piden: los pone el default del modelo (ARS
+        # y activo). Un producto que se carga a mano se carga para venderlo.
+        producto = Producto(
+            empresa_id=current_user.empresa_id,
+            sku=sku,
+            nombre=nombre,
+            costo_unitario=costo,
+            stock=stock,
+        )
+        db.session.add(producto)
+        db.session.commit()
+    except (CostoInvalido, ProductoInvalido) as error:
+        db.session.rollback()
+        flash(str(error), 'error')
+        return render_template('producto_nuevo.html', enviado=enviado)
+    except IntegrityError:
+        # La carrera contra otra alta del mismo SKU. Mismo aviso que la
+        # verificacion de arriba: para quien lo esta cargando es el mismo
+        # problema, no importa cual de las dos llego primero.
+        db.session.rollback()
+        flash(MENSAJE_SKU_REPETIDO % enviado['sku'], 'error')
+        return render_template('producto_nuevo.html', enviado=enviado)
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        flash('No se pudo guardar el producto. Revisa los datos e intenta de nuevo.',
+              'error')
+        return render_template('producto_nuevo.html', enviado=enviado)
+
+    # El historial de esta alta lo escribe solo el hook de `auditoria.py`
+    # (`Producto` esta en TABLAS_AUDITADAS): no hay ninguna llamada a
+    # `registrar_cambio()` aca, y no tiene que haberla -- duplicaria la fila.
+
+    if costo is None:
+        # No es un error: el costo es opcional a proposito, porque a veces no
+        # se sabe en el momento de cargar el producto. Pero sin el, cada venta
+        # congela `costo_unitario_snapshot` en NULL y esa venta se queda sin
+        # ganancia calculable para siempre. Por eso se avisa fuerte.
+        flash('Se cargo "%s", pero sin costo: las ventas que hagas antes de '
+              'cargarlo van a quedar sin ganancia calculable. Podes ponerlo '
+              'aca abajo.' % nombre, 'warning')
+    else:
+        flash('Se cargo "%s".' % nombre, 'success')
+
+    # Al listado y no de vuelta al formulario: ahi se ve el producto recien
+    # creado entre los demas, y es donde se carga el costo si quedo pendiente.
     return redirect(url_for('productos.listar_stock'))
 
 

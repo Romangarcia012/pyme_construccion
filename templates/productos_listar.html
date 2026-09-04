@@ -42,6 +42,19 @@
         }
         .btn-volver:hover { background: #555; }
 
+        .btn-nuevo {
+            background: #2d6a4f;
+            color: #fff;
+            padding: 10px 16px;
+            border-radius: 6px;
+            text-decoration: none;
+            font-size: 14px;
+            font-weight: 600;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn-nuevo:hover { background: #35805e; }
+
         .tabla-container {
             background: #1a1a1a;
             border-radius: 8px;
@@ -156,6 +169,7 @@
                 <h1>Stock</h1>
                 <p class="subtitulo">Lo que hay en el catálogo, cuánto queda y cuánto cuesta</p>
             </div>
+            <a href="{{ url_for('productos.nuevo_producto') }}" class="btn-nuevo">+ Nuevo producto</a>
         </div>
 
         {% with messages = get_flashed_messages(with_categories=true) %}
@@ -233,7 +247,12 @@
                 </tbody>
             </table>
             {% else %}
-                <p class="vacio">Todavía no hay productos en el catálogo.</p>
+                <p class="vacio">
+                    Todavía no hay productos en el catálogo.<br>
+                    Sincronizá Tiendanube desde
+                    <a href="{{ url_for('integraciones.listar') }}" style="color:#4dabf7;">Integraciones</a>
+                    o <a href="{{ url_for('productos.nuevo_producto') }}" style="color:#4dabf7;">cargá uno a mano</a>.
+                </p>
             {% endif %}
         </div>
 

@@ -174,7 +174,8 @@
                 <p style="color: #ffd43b;">Todavía no hay productos en el catálogo.</p>
                 <p class="ayuda">Sincronizá Tiendanube desde
                    <a href="{{ url_for('integraciones.listar') }}" style="color:#4dabf7;">Integraciones</a>
-                   o cargá productos antes de registrar una venta.</p>
+                   o <a href="{{ url_for('productos.nuevo_producto') }}" style="color:#4dabf7;">cargá un producto a mano</a>
+                   antes de registrar una venta.</p>
             </div>
         {% else %}
         <form method="POST">
