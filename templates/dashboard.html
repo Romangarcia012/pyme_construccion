@@ -328,16 +328,31 @@
         .malo {
             border-left: 4px solid #dc3545;
         }
-        
+
         .malo .value {
             color: #dc3545;
         }
-        
+
         .malo .status {
             background: rgba(220, 53, 69, 0.1);
             color: #dc3545;
         }
-        
+
+        /* FASE-EVA-S2: el indicador que todavia no se puede calcular. Gris, no
+           rojo: que falte cargar un dato no es una mala noticia. */
+        .neutral {
+            border-left: 4px solid #555;
+        }
+
+        .neutral .value {
+            color: #777;
+        }
+
+        .neutral .status {
+            background: rgba(255, 255, 255, 0.04);
+            color: #a0a0a0;
+        }
+
         /* EVA */
         .eva-container {
             background: #1a1a1a;
@@ -702,30 +717,40 @@
                 <div class="status">Dinero gastado</div>
             </div>
     
-            <div class="card {% if analisis.utilidad_neta > 0 %}excelente{% else %}malo{% endif %}">
+            {# Sin un solo movimiento cargado la ganancia neta da 0, y 0 no es
+               "> 0", asi que el card salia en rojo. Otra alarma que no
+               diagnostica nada: es el mismo cero de la cuenta vacia. #}
+            <div class="card {% if not analisis.hay_movimiento %}neutral{% elif analisis.utilidad_neta > 0 %}excelente{% else %}malo{% endif %}">
                 <h3>Ganancia Neta</h3>
                 <div class="value">${{ "%.0f"|format(analisis.utilidad_neta) }}</div>
-                <div class="status">Ganancia real</div>
+                <div class="status">{% if analisis.hay_movimiento %}Ganancia real{% else %}Sin movimientos todavía{% endif %}</div>
             </div>
         </div>
 
         <!-- CARDS PRINCIPALES - FILA 2 (Métricas) -->
         <div class="cards-grid">
-            <div class="card {% if analisis.margen_estado[0] == 'excelente' %}excelente{% else %}malo{% endif %}">
+            {# FASE-EVA-S2: la clase sale del propio estado, no de una segunda
+               comparacion escrita a mano en la plantilla. El card de ROI
+               decidia su color con `analisis.roi >= 15` mientras el texto de
+               abajo salia de `roi_estado`: dos fuentes para el mismo semaforo,
+               y desde que `roi` puede ser None esa comparacion ademas explota
+               (None >= 15 es TypeError en Python 3). Ahora los tres leen
+               `*_estado[0]`, que ya vale 'excelente', 'malo' o 'neutral'. #}
+            <div class="card {{ analisis.margen_estado[0] }}">
                 <h3>Margen %</h3>
-                <div class="value">{{ "%.1f"|format(analisis.margen_ganancia) }}%</div>
+                <div class="value">{% if analisis.margen_ganancia is none %}—{% else %}{{ "%.1f"|format(analisis.margen_ganancia) }}%{% endif %}</div>
                 <div class="status">{{ analisis.margen_estado[1] }}</div>
             </div>
-    
-            <div class="card {% if analisis.roi >= 15 %}excelente{% else %}malo{% endif %}">
+
+            <div class="card {{ analisis.roi_estado[0] }}">
                 <h3>ROI %</h3>
-                <div class="value">{{ "%.1f"|format(analisis.roi) }}%</div>
+                <div class="value">{% if analisis.roi is none %}—{% else %}{{ "%.1f"|format(analisis.roi) }}%{% endif %}</div>
                 <div class="status">{{ analisis.roi_estado[1] }}</div>
             </div>
-    
-            <div class="card {% if analisis.eva > 0 %}excelente{% else %}malo{% endif %}">
+
+            <div class="card {{ analisis.eva_estado[0] }}">
                 <h3>EVA - Valor Económico Agregado</h3>
-                <div class="value">${{ "%.0f"|format(analisis.eva) }}</div>
+                <div class="value">{% if analisis.eva is none %}—{% else %}${{ "%.0f"|format(analisis.eva) }}{% endif %}</div>
                 <div class="eva-status" style="margin-top: 5px;">{{ analisis.eva_estado[1] }}</div>
             </div>
         </div>

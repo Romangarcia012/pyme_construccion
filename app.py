@@ -395,8 +395,14 @@ def crear_empresa():
         usuario.empresa.email = request.form.get('email')
         usuario.empresa.direccion = request.form.get('direccion')
         usuario.empresa.descripcion = request.form.get('descripcion')
-        usuario.empresa.capital_invertido = float(request.form.get('capital_invertido', 0))
-        
+        # FASE-EVA-S2: aca habia un
+        #     usuario.empresa.capital_invertido = float(request.form.get('capital_invertido', 0))
+        # que leia un campo que `crear_empresa.html` NUNCA renderizo. El
+        # `.get(..., 0)` tapaba el KeyError, asi que la linea no fallaba: le
+        # escribia 0 al capital en cada alta de empresa, prometiendo un dato que
+        # el alta jamas pidio. Se saca la lectura muerta en vez de inventarle un
+        # input al onboarding: el capital se carga en /config/eva, que es la
+        # pantalla que existe para eso.
         db.session.commit()
         
         flash('¡Bienvenido! Tu empresa ha sido creada', 'success')
@@ -916,24 +922,52 @@ def caja_general():
 @app.route('/config/eva', methods=['GET', 'POST'])
 @login_required
 def config_eva():
+    """Configuracion de la empresa: los datos y los tres parametros del EVA.
+
+    FASE-EVA-S2: la plantilla POSTEA `nombre`, `ruc` y `email` desde la seccion
+    "Datos de la Empresa" -- con los valores actuales precargados y `nombre`
+    marcado `required` -- y esta ruta escribia SOLO los tres campos del EVA. O
+    sea que corregir el nombre de la empresa mostraba "Configuracion
+    actualizada" y no guardaba nada.
+
+    De las dos salidas posibles se eligio conectar el guardado, no sacar los
+    campos del form, porque sacarlos dejaba a Korvo sin ninguna forma de editar
+    el nombre: el otro lugar donde se escriben esos tres campos es
+    `crear_empresa()`, y a /crear-empresa se llega una sola vez, en el redirect
+    de la verificacion de email (app.py:380). No hay link a esa pantalla desde
+    ningun menu. Sacar los inputs habria arreglado la mentira perdiendo la
+    unica via de correccion; conectarlos son tres lineas y no pierde nada.
+    """
     empresa = current_user.empresa
-    
+
     if request.method == 'POST':
         try:
+            nombre = request.form.get('nombre', '').strip()
+            if not nombre:
+                flash('El nombre de la empresa es obligatorio', 'danger')
+                return redirect(url_for('config_eva'))
+
+            empresa.nombre = nombre
+            # `or None` para que borrar el campo deje NULL y no un string vacio:
+            # la plantilla ya hace `empresa.ruc or ''`, y un '' guardado se leia
+            # igual que un NULL pero ensuciaba la columna.
+            empresa.ruc = request.form.get('ruc', '').strip() or None
+            empresa.email = request.form.get('email', '').strip() or None
+
             empresa.tasa_costo_capital = float(request.form['tasa_costo_capital'])
             empresa.capital_invertido = float(request.form['capital_invertido'])
             empresa.tasa_impuestos = float(request.form['tasa_impuestos']) / 100
-            
+
             db.session.commit()
-            
-            registrar_cambio(current_user.id, 'editar', 'configuracion', empresa.id, 
-                           'Configuración EVA actualizada')
-            
+
+            registrar_cambio(current_user.id, 'editar', 'configuracion', empresa.id,
+                           'Configuración de empresa actualizada')
+
             flash('Configuración actualizada', 'success')
             return redirect(url_for('dashboard'))
         except Exception as e:
             flash(f'Error: {str(e)}', 'danger')
-    
+
     return render_template('configurar_eva.html', empresa=empresa)
 
 # ======================== HISTORIAL ========================
