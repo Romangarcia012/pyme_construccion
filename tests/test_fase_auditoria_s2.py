@@ -411,9 +411,12 @@ class TestHookNoDuplicaNiHaceRuido(BaseAuditoria):
         db.session.commit()
 
         self.post(self.roman_id, '/gasto/nuevo',
+                  # `origen_fondo` es obligatorio en el alta desde
+                  # FASE-CAJA-GENERAL-S3; 'capital' es el que no pide cuenta.
                   data={'descripcion': 'Flete', 'monto': '1500',
                         'categoria_id': str(categoria.id),
-                        'fecha': '2026-09-03'})
+                        'fecha': '2026-09-03',
+                        'origen_fondo': 'capital'})
 
         gastos = self.historial_de(tipo='gasto')
         self.assertEqual(len(gastos), 1,

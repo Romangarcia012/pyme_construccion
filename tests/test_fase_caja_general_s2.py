@@ -185,12 +185,17 @@ class BaseCaja(unittest.TestCase):
                 .one().id)
 
     def cargar_gasto(self, usuario_id, descripcion, monto, fecha,
-                     categoria='Publicidad'):
+                     categoria='Publicidad', origen_fondo='capital'):
         return self.post(usuario_id, '/gasto/nuevo', data={
             'descripcion': descripcion,
             'monto': str(monto),
             'fecha': fecha,
             'categoria_id': str(self.categoria_id(categoria)),
+            # FASE-CAJA-GENERAL-S3 hizo obligatorio decir de que plata salio
+            # el gasto. Esta suite no va de eso, asi que usa 'capital': es el
+            # unico origen que no arrastra una cuenta de cobro, y esta base de
+            # prueba no tiene ninguna.
+            'origen_fondo': origen_fondo,
         })
 
     def cargar_ingreso(self, usuario_id, descripcion, monto, fecha,
@@ -315,6 +320,7 @@ class TestFechaEnElAlta(BaseCaja):
             'monto': '100.00',
             'fecha': '31/07/2026',
             'categoria_id': str(self.categoria_id('Publicidad')),
+            'origen_fondo': 'capital',
         })
         self.assertIn('La fecha no es válida',
                       respuesta.get_data(as_text=True))

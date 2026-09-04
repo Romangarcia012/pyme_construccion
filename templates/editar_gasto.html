@@ -113,6 +113,12 @@
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
         
+        .help-text {
+            font-size: 12px;
+            color: #888;
+            margin-top: 5px;
+        }
+        
         .alerta {
             background: rgba(255, 193, 7, 0.1);
             border: 1px solid #ffc107;
@@ -170,6 +176,36 @@
                     </div>
                 </div>
                 
+
+                <!-- FASE-CAJA-GENERAL-S3: de que bolsillo salio la plata.
+                     El selector de cuenta se OCULTA cuando el origen es
+                     Capital, no se borra: por eso la ruta descarta la cuenta
+                     en ese caso en vez de rechazarla (el navegador manda
+                     igual lo que quedo seleccionado). -->
+                <div class="form-group">
+                    <label for="origen_fondo">¿Con qué plata se pagó?</label>
+                    <select id="origen_fondo" name="origen_fondo" autocomplete="off">
+                        <option value="">-- Sin especificar --</option>
+                        {% for clave, etiqueta in origenes.items() %}
+                            <option value="{{ clave }}"{% if clave == gasto.origen_fondo %} selected{% endif %}>{{ etiqueta }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="help-text">
+                        Facturación = salió de la plata que entra por las ventas.
+                        Capital = salió del aporte de los socios.
+                    </p>
+                </div>
+
+                <div class="form-group" id="grupo-cuenta">
+                    <label for="cuenta_pago_id">¿De qué cuenta?</label>
+                    <select id="cuenta_pago_id" name="cuenta_pago_id" autocomplete="off">
+                        <option value="">-- Seleccioná la cuenta --</option>
+                        {% for cuenta in cuentas %}
+                            <option value="{{ cuenta.id }}"{% if cuenta.id == gasto.cuenta_pago_id %} selected{% endif %}>{{ cuenta.etiqueta_socio }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+
                 <div class="botones">
                     <button type="submit" class="btn-guardar">Guardar Gasto</button>
                     <button type="button" class="btn-cancelar" onclick="window.location.href='{{ url_for('dashboard') }}'">Cancelar</button>
@@ -177,5 +213,21 @@
             </form>
         </div>
     </div>
+
+    <script>
+        // Muestra el selector de cuenta solo cuando el gasto salio de la
+        // facturacion. Es comodidad, no validacion: quien mande el formulario
+        // a mano igual choca contra la ruta y contra el CHECK de la base.
+        (function () {
+            var origen = document.getElementById('origen_fondo');
+            var grupo = document.getElementById('grupo-cuenta');
+            function refrescar() {
+                grupo.style.display =
+                    origen.value === '{{ origen_facturacion }}' ? '' : 'none';
+            }
+            origen.addEventListener('change', refrescar);
+            refrescar();
+        })();
+    </script>
 </body>
 </html>

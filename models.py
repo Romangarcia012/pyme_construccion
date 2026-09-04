@@ -87,6 +87,38 @@ class Categoria(db.Model):
     empresa = db.relationship('Empresa', backref='categorias')
     
 
+# FASE-CAJA-GENERAL-S3: de que plata salio un gasto, con vocabulario fijo.
+#
+# La clave es lo que se guarda en gasto.origen_fondo y lo que se compara en
+# codigo; el valor es como se escribe en pantalla, igual que en SOCIOS.
+#
+# Son los dos unicos bolsillos que existen y no se mezclan:
+#
+#   'facturacion' -> salio de la plata que entra por las ventas, y por eso
+#                    tiene que decir de CUAL cuenta de cobro salio (la de
+#                    Roman o la de Nachi). Esa plata le baja el saldo real a
+#                    ese socio: es lo que /reportes/caja-socio resta.
+#   'capital'     -> salio del pool que los socios aportaron, que es plata
+#                    ajena a la facturacion. No le baja el saldo a nadie en
+#                    particular, y por eso NO lleva cuenta de cobro.
+#
+# El aporte que forma ese pool ya entra por el otro lado, como Ingreso con la
+# categoria "Aporte de capital (socios)" (FASE-CAJA-GENERAL-S2). Esto es la
+# salida, no la entrada, y no se toca con aquello.
+ORIGEN_FACTURACION = 'facturacion'
+ORIGEN_CAPITAL = 'capital'
+
+ORIGENES_FONDO = OrderedDict([
+    (ORIGEN_FACTURACION, 'Facturación'),
+    (ORIGEN_CAPITAL, 'Capital'),
+])
+
+# Lo que se muestra cuando la fila no lo dice. NO es un tercer origen: es la
+# ausencia del dato, y se escribe distinto justamente para que se note que
+# falta en vez de parecer una categoria mas.
+ETIQUETA_SIN_ORIGEN = 'sin dato'
+
+
 class Gasto(db.Model):
     __tablename__ = 'gasto'
     id = db.Column(db.Integer, primary_key=True)
@@ -117,7 +149,87 @@ class Gasto(db.Model):
     moneda = db.Column(db.String(3))
 
     cuenta_pago = db.relationship('CuentaCobro', backref='gastos')
-    
+
+    # --- FASE-CAJA-GENERAL-S3: con que plata se pago ------------------------
+    # Vocabulario fijo (ver ORIGENES_FONDO). NULLABLE a proposito: NULL es
+    # "todavia no se dijo", no un tercer origen. Las filas viejas se quedan
+    # asi -- no se les inventa de que bolsillo salieron -- y el reporte de caja
+    # las cuenta aparte como "sin clasificar" en vez de hacer que el saldo
+    # mienta por omision.
+    origen_fondo = db.Column(db.String(20))
+
+    __table_args__ = (
+        # El mismo vocabulario que valida `_validar_origen_fondo`, pero del
+        # lado de la base. No es redundante: el formulario no es el unico
+        # camino de escritura -- las migraciones y los scripts escriben SQL
+        # crudo, que no pasa por el modelo ni por su @validates.
+        db.CheckConstraint(
+            "origen_fondo IS NULL OR origen_fondo IN ('facturacion', 'capital')",
+            name='ck_gasto_origen_fondo_vocabulario'),
+        # La regla que le da sentido al campo: 'facturacion' SIN cuenta no
+        # contesta la pregunta (¿de la de Roman o de la de Nachi?), y
+        # 'capital' CON cuenta afirma algo falso -- que esa plata salio de lo
+        # facturado por ese socio -- que le restaria de menos al saldo real.
+        #
+        # El caso origen_fondo NULL queda deliberadamente fuera de la regla:
+        # cuenta_pago_id existe desde FASE2-S1 como campo suelto y una fila
+        # vieja podria tenerlo cargado sin que nadie haya dicho de que
+        # bolsillo salio. Apretarlo aca obligaria a inventar ese dato o a
+        # borrar el que ya hay.
+        db.CheckConstraint(
+            "origen_fondo IS NULL"
+            " OR (origen_fondo = 'facturacion' AND cuenta_pago_id IS NOT NULL)"
+            " OR (origen_fondo = 'capital' AND cuenta_pago_id IS NULL)",
+            name='ck_gasto_origen_fondo_cuenta'),
+    )
+
+    @db.validates('origen_fondo')
+    def _validar_origen_fondo(self, clave, valor):
+        """Se escribe con una de las claves de ORIGENES_FONDO, o no se escribe.
+
+        Mismo criterio que `CuentaCobro._validar_socio`: un typo
+        ('Facturacion', 'capitl') no puede quedar guardado. Se colaria en la
+        base como un origen desconocido, no lo levantaria ni la suma de
+        facturacion ni la de capital, y el gasto desapareceria de las dos
+        columnas del reporte sin que nada lo delate.
+        """
+        if valor is None or valor == '':
+            return None
+        if valor not in ORIGENES_FONDO:
+            raise ValueError(
+                'origen_fondo invalido: %r. Los validos son %s.'
+                % (valor, ', '.join(ORIGENES_FONDO)))
+        return valor
+
+    @property
+    def origen_legible(self):
+        """Como se escribe el origen en pantalla, cuenta incluida.
+
+        'Facturación — Roman' / 'Capital' / 'sin dato'. Vive en el modelo y no
+        en cada plantilla porque lo muestran tres pantallas distintas
+        (/gasto/listar, /caja-general y el reporte de caja) y las tres tienen
+        que decir lo mismo.
+
+        Para el nombre del socio se usa el vocabulario (SOCIOS), no
+        `cuenta.nombre`: el nombre es texto libre y renombrar la cuenta no
+        tiene por que cambiar lo que dice esta linea. Si la cuenta no tiene
+        socio asignado se cae al nombre, que es lo unico que queda.
+        """
+        if self.origen_fondo is None:
+            return ETIQUETA_SIN_ORIGEN
+
+        etiqueta = ORIGENES_FONDO[self.origen_fondo]
+        if self.origen_fondo != ORIGEN_FACTURACION:
+            return etiqueta
+
+        cuenta = self.cuenta_pago
+        if cuenta is None:
+            # El CHECK de arriba no deberia dejar llegar aca. Si igual pasa
+            # (una fila escrita antes del CHECK, una base sin migrar), se
+            # muestra el hueco en vez de reventar la pantalla entera.
+            return '%s — %s' % (etiqueta, ETIQUETA_SIN_ORIGEN)
+        return '%s — %s' % (etiqueta, cuenta.etiqueta_socio)
+
 
 class Ingreso(db.Model):
     __tablename__ = 'ingreso'
@@ -519,6 +631,19 @@ class CuentaCobro(db.Model):
             "socio IS NULL OR socio IN ('roman', 'nachi')",
             name='ck_cuenta_cobro_socio_vocabulario'),
     )
+
+    @property
+    def etiqueta_socio(self):
+        """Como se nombra esta cuenta cuando lo que importa es de quien es.
+
+        'Roman' / 'Nachi' del vocabulario, y el nombre completo de la cuenta
+        solo cuando no tiene socio asignado -- que es el unico caso donde el
+        texto libre sigue siendo lo mejor que hay. Lo usa el selector "¿de qué
+        cuenta?" del formulario de gasto (FASE-CAJA-GENERAL-S3): ahi la
+        pregunta es de que socio, no como se llama la cuenta en el panel de
+        Mercado Pago.
+        """
+        return SOCIOS.get(self.socio) or self.nombre
 
     @db.validates('socio')
     def _validar_socio(self, clave, valor):

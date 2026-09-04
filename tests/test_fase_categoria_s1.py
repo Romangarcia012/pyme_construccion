@@ -266,6 +266,8 @@ class TestBorrarCuenta(BaseCategoria):
             'monto': '1500.00',
             'fecha': '2026-09-01',
             'categoria_id': str(publicidad.id),
+            # Obligatorio desde FASE-CAJA-GENERAL-S3; 'capital' no pide cuenta.
+            'origen_fondo': 'capital',
         })
 
         gasto = Gasto.query.filter_by(descripcion='Ads de septiembre').one()
@@ -281,6 +283,7 @@ class TestBorrarCuenta(BaseCategoria):
             'monto': '15980.54',
             'fecha': '2026-08-27',
             'categoria_id': str(publicidad.id),
+            'origen_fondo': 'capital',
         })
 
         self.post(self.roman_id, '/cuenta/eliminar')

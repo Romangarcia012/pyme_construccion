@@ -108,6 +108,61 @@
            el reporte de margen: no esta roto, le falta que alguien decida. */
         .aviso { color: #d6a441; }
 
+        /* FASE-CAJA-GENERAL-S3: los dos numeros de la fila del socio, uno
+           debajo del otro. El de arriba es un total historico de ventas; el
+           de abajo es la plata que deberia quedar. Se escriben distinto a
+           proposito -- si se vieran iguales, el primero se seguiria leyendo
+           como "lo que tiene". */
+        .facturado-historico {
+            display: block;
+            color: #999;
+            font-size: 13px;
+            font-weight: 400;
+        }
+
+        .saldo-real {
+            display: block;
+            margin-top: 2px;
+        }
+
+        /* Un saldo negativo se paga de algun lado: o entro plata que no esta
+           cargada, o se gasto de mas. En los dos casos hay que mirarlo. */
+        .saldo-negativo { color: #e06c6c; }
+
+        .etiqueta-monto {
+            color: #888;
+            font-size: 11px;
+            font-weight: 400;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        /* Los gastos que NO le restan a ningun socio. Al pie y en su propio
+           bloque: son referencia, no parte de la cuenta de arriba. */
+        .aparte {
+            margin-top: 25px;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 18px 20px;
+        }
+        .aparte h2 {
+            color: #fff;
+            font-size: 15px;
+            margin-bottom: 12px;
+        }
+        .aparte .linea {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            padding: 7px 0;
+            border-bottom: 1px solid #2a2a2a;
+            font-size: 14px;
+            color: #bbb;
+        }
+        .aparte .linea:last-child { border-bottom: none; }
+        .aparte .monto { font-variant-numeric: tabular-nums; color: #e0e0e0; }
+
         .total-general td {
             background: #252525;
             border-top: 2px solid #444;
@@ -156,7 +211,8 @@
                         <th>Socio / canal</th>
                         <th>Cuenta de cobro</th>
                         <th class="num">Pedidos</th>
-                        <th class="num">Facturado</th>
+                        <th class="num">Gastado de ahí</th>
+                        <th class="num">Facturado / Tenés realmente</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -167,7 +223,20 @@
                         </td>
                         <td></td>
                         <td class="num">{{ socio.pedidos }}</td>
-                        <td class="num">{{ '%.2f'|format(socio.total) }}</td>
+                        <td class="num">
+                            {{ '%.2f'|format(socio.gastado) }}
+                            <span class="etiqueta-monto">
+                                {{ socio.gastos }} gasto{{ '' if socio.gastos == 1 else 's' }}
+                            </span>
+                        </td>
+                        <td class="num">
+                            <span class="facturado-historico">
+                                Facturado: {{ '%.2f'|format(socio.total) }}
+                            </span>
+                            <span class="saldo-real {{ 'saldo-negativo' if socio.saldo_real < 0 else '' }}">
+                                Tenés realmente: {{ '%.2f'|format(socio.saldo_real) }}
+                            </span>
+                        </td>
                     </tr>
                         {% for canal in socio.canales %}
                         <tr class="canal">
@@ -183,25 +252,63 @@
                                 {% endif %}
                             </td>
                             <td class="num">{{ canal.pedidos }}</td>
+                            <!-- El gasto es de la CUENTA, no del canal: no se
+                                 puede repartir entre los canales que cobran
+                                 ahi sin inventar de cual salio. Por eso la
+                                 celda del desglose queda vacia. -->
+                            <td class="num"></td>
                             <td class="num">{{ '%.2f'|format(canal.total) }}</td>
                         </tr>
                         {% else %}
                         <tr class="canal">
-                            <td colspan="4"><span class="detalle">Ningún canal cobra en su cuenta.</span></td>
+                            <td colspan="5"><span class="detalle">Ningún canal cobra en su cuenta.</span></td>
                         </tr>
                         {% endfor %}
                     {% endfor %}
                     <tr class="total-general">
-                        <td>Total facturado</td>
+                        <td>Total</td>
                         <td></td>
                         <td class="num">{{ pedidos_totales }}</td>
-                        <td class="num">{{ '%.2f'|format(total_general) }}</td>
+                        <td class="num">{{ '%.2f'|format(gastado_total) }}</td>
+                        <td class="num">
+                            <span class="facturado-historico">
+                                Facturado: {{ '%.2f'|format(total_general) }}
+                            </span>
+                            <span class="saldo-real {{ 'saldo-negativo' if saldo_real_total < 0 else '' }}">
+                                Tenés realmente: {{ '%.2f'|format(saldo_real_total) }}
+                            </span>
+                        </td>
                     </tr>
                 </tbody>
             </table>
             {% else %}
             <p class="vacio">Todavía no hay socios cargados.</p>
             {% endif %}
+        </div>
+
+        <!-- FASE-CAJA-GENERAL-S3: gastos que no le bajan el saldo a ningún
+             socio. Van al pie y aparte a propósito: si se sumaran arriba,
+             restarían plata de una cuenta de la que nunca salieron. -->
+        <div class="aparte">
+            <h2>Gastos que no salen de la facturación</h2>
+            <div class="linea">
+                <span>
+                    Pagados con capital de los socios
+                    <span class="etiqueta-monto">
+                        {{ capital_cantidad }} gasto{{ '' if capital_cantidad == 1 else 's' }}
+                    </span>
+                </span>
+                <span class="monto">{{ '%.2f'|format(capital_monto) }}</span>
+            </div>
+            <div class="linea">
+                <span class="{{ 'aviso' if sin_clasificar_cantidad else '' }}">
+                    Sin clasificar (no dicen de qué plata salieron)
+                    <span class="etiqueta-monto">
+                        {{ sin_clasificar_cantidad }} gasto{{ '' if sin_clasificar_cantidad == 1 else 's' }}
+                    </span>
+                </span>
+                <span class="monto">{{ '%.2f'|format(sin_clasificar_monto) }}</span>
+            </div>
         </div>
 
         <p class="aclaracion">
@@ -214,6 +321,14 @@
             <a href="{{ url_for('ventas.listar_pedidos') }}">Ver Ventas</a>.
             Un socio en cero con su canal apagado no es un dato que falte: es que por
             ahí todavía no se vendió.
+            <br><br>
+            <strong>Facturado</strong> es el total histórico de ventas por sus canales;
+            <strong>tenés realmente</strong> le resta lo que ya se pagó desde esa misma
+            cuenta, y es la plata que debería quedar si nadie la tocó por fuera del
+            sistema. Los gastos del recuadro de abajo no entran en esa resta: los de
+            capital salieron de otro bolsillo, y los sin clasificar no dicen de cuál
+            —mientras haya alguno, el saldo de arriba está incompleto y se ve que lo
+            está.
         </p>
     </div>
 </body>

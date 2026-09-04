@@ -65,7 +65,16 @@ from flask_login import current_user, login_required
 from sqlalchemy import func
 from sqlalchemy.orm import joinedload
 
-from models import SOCIOS, CanalVenta, Pedido, db
+from models import (
+    ORIGEN_CAPITAL,
+    ORIGEN_FACTURACION,
+    SOCIOS,
+    CanalVenta,
+    CuentaCobro,
+    Gasto,
+    Pedido,
+    db,
+)
 from rutas_productos import (
     ESTADOS_NO_VENDIDOS,
     ETIQUETA_SIN_IDENTIFICAR,
@@ -513,11 +522,71 @@ def _pedidos_por_canal(empresa_id):
     return {canal_id: int(cantidad or 0) for canal_id, cantidad in filas}
 
 
+def _gastado_por_socio(empresa_id):
+    """{clave_de_socio: (cuanto salio de su cuenta, cuantos gastos)}.
+
+    Solo los gastos con origen_fondo='facturacion' (FASE-CAJA-GENERAL-S3):
+    son los unicos que salieron de la plata que entra por las ventas, y por
+    lo tanto los unicos que le bajan el saldo a un socio en particular.
+
+    Los de 'capital' NO entran aca a proposito. Salieron del pool que
+    aportaron los socios, que es plata ajena a la facturacion: restarlos de lo
+    que factura Roman diria que le queda menos de lo que realmente le queda.
+    Se muestran aparte, como referencia.
+
+    Los que tienen origen_fondo NULL tampoco entran, y por el motivo
+    contrario: no se sabe de que bolsillo salieron, y elegir uno seria
+    adivinar. Se cuentan por separado (`_gastos_sin_clasificar`) para que el
+    faltante se vea en la pantalla en vez de esconderse dentro de un saldo.
+
+    El socio sale del JOIN a cuenta_cobro y no del id de la cuenta: es el
+    mismo criterio que el resto de la pantalla -- de quien es una cuenta lo
+    dice `cuenta_cobro.socio`, no su nombre ni su id.
+    """
+    filas = (db.session.query(CuentaCobro.socio,
+                              func.coalesce(func.sum(Gasto.monto), 0),
+                              func.count(Gasto.id))
+             .join(CuentaCobro, Gasto.cuenta_pago_id == CuentaCobro.id)
+             .filter(Gasto.empresa_id == empresa_id)
+             .filter(Gasto.origen_fondo == ORIGEN_FACTURACION)
+             .group_by(CuentaCobro.socio)
+             .all())
+    # Una cuenta sin socio cae en la clave None, que es la misma fila donde ya
+    # va la facturacion sin dueno. Los dos numeros de esa fila hablan de la
+    # misma plata sin identificar, asi que se restan entre si igual que los de
+    # cualquier socio.
+    return {socio: (Decimal(monto or 0), int(cantidad or 0))
+            for socio, monto, cantidad in filas}
+
+
+def _total_gastos(empresa_id, condicion):
+    """(suma, cantidad) de los gastos de la empresa que cumplen `condicion`.
+
+    Se suma en la base por lo mismo que `_facturado_por_canal`: para llegar a
+    dos numeros no hace falta abrir cada gasto.
+    """
+    monto, cantidad = (db.session.query(func.coalesce(func.sum(Gasto.monto), 0),
+                                        func.count(Gasto.id))
+                       .filter(Gasto.empresa_id == empresa_id)
+                       .filter(condicion)
+                       .one())
+    return Decimal(monto or 0), int(cantidad or 0)
+
+
 def _nuevo_socio(clave, nombre):
     return {
         'clave': clave,
         'nombre': nombre,
+        # `total` es lo FACTURADO: la suma de pedido.total de sus canales.
+        # Es un total historico de ventas y no cambia con esta slice.
         'total': CERO,
+        # FASE-CAJA-GENERAL-S3: lo que ya salio de esa misma cuenta.
+        'gastado': CERO,
+        'gastos': 0,
+        # facturado - gastado_de_ahi. Es la plata que deberia quedar en la
+        # cuenta si nadie la toco por fuera del sistema. Puede dar negativo, y
+        # que se vea es el punto: significa que se pago mas de lo que entro.
+        'saldo_real': CERO,
         'pedidos': 0,
         'canales': [],
     }
@@ -526,15 +595,40 @@ def _nuevo_socio(clave, nombre):
 @reportes_bp.route('/caja-socio')
 @login_required
 def caja_socio():
-    """Cuanto factura cada socio, y por que canal.
+    """Cuanto factura cada socio, cuanto ya gasto de ahi, y que le queda.
 
     Una fila por socio con el desglose de sus canales debajo. Sin rango de
     fechas: es el acumulado, igual que el resto de los reportes de la fase.
+
+    LA CUENTA (FASE-CAJA-GENERAL-S3)
+
+        facturado    = SUM(pedido.total) de sus canales, sin cancelados
+        gastado      = SUM(gasto.monto) con origen_fondo='facturacion' y
+                       cuenta_pago_id apuntando a la cuenta de ese socio
+        saldo_real   = facturado - gastado
+
+    Hasta esta slice la pantalla mostraba solo el primero, y ese numero se
+    leia como "lo que tiene Roman" cuando en realidad es "lo que Roman
+    facturo desde siempre". Son dos cosas muy distintas en cuanto se paga el
+    primer proveedor. Por eso van los dos juntos, uno debajo del otro: el
+    historico no se saca -- sigue haciendo falta para cuadrar contra las
+    ventas -- pero deja de ser el unico numero de la fila.
+
+    LO QUE NO RESTA
+
+    Los gastos de capital no le bajan el saldo a ningun socio: salieron del
+    pool que aportaron los tres, no de lo que factura este canal. Van en su
+    propio bloque al pie, como referencia.
+
+    Los gastos sin origen tampoco. No se sabe de que bolsillo salieron y
+    elegir uno seria inventar el dato; se cuentan aparte para que se vea que
+    faltan por clasificar, en vez de que el saldo mienta por omision.
     """
     empresa_id = current_user.empresa_id
 
     facturado = _facturado_por_canal(empresa_id)
     contados = _pedidos_por_canal(empresa_id)
+    gastado = _gastado_por_socio(empresa_id)
 
     # Se parte de los CANALES, no de los pedidos: un canal que todavia no
     # vendio nada tiene que aparecer igual (Mercado Libre hoy), y si el barrido
@@ -579,10 +673,38 @@ def caja_socio():
             'pedidos': pedidos,
         })
 
+    # El gasto se imputa DESPUES de repartir los canales, y sobre `socios`
+    # directamente: un socio puede tener gastos pagados desde su cuenta sin
+    # tener todavia un canal que cobre ahi, y ese caso tiene que salir igual.
+    for clave, (monto, cantidad) in gastado.items():
+        grupo = socios.get(clave)
+        if grupo is None:
+            grupo = _nuevo_socio(clave, SOCIOS.get(clave, ETIQUETA_SIN_SOCIO))
+            socios[clave] = grupo
+        grupo['gastado'] += monto
+        grupo['gastos'] += cantidad
+
+    for grupo in socios.values():
+        grupo['saldo_real'] = grupo['total'] - grupo['gastado']
+
     filas = list(socios.values())
+
+    # Los dos bloques que se muestran APARTE, sin restarle a nadie.
+    capital_monto, capital_cantidad = _total_gastos(
+        empresa_id, Gasto.origen_fondo == ORIGEN_CAPITAL)
+    sin_clasificar_monto, sin_clasificar_cantidad = _total_gastos(
+        empresa_id, Gasto.origen_fondo.is_(None))
 
     return render_template('reportes_caja_socio.html',
                            socios=filas,
                            total_general=sum((fila['total'] for fila in filas),
                                              CERO),
-                           pedidos_totales=sum(fila['pedidos'] for fila in filas))
+                           pedidos_totales=sum(fila['pedidos'] for fila in filas),
+                           gastado_total=sum((fila['gastado'] for fila in filas),
+                                             CERO),
+                           saldo_real_total=sum((fila['saldo_real']
+                                                 for fila in filas), CERO),
+                           capital_monto=capital_monto,
+                           capital_cantidad=capital_cantidad,
+                           sin_clasificar_monto=sin_clasificar_monto,
+                           sin_clasificar_cantidad=sin_clasificar_cantidad)

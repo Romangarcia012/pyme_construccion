@@ -2,6 +2,15 @@ from flask import Flask, render_template, request, redirect, url_for, session, f
 from flask_login import LoginManager, login_required, current_user, login_user, logout_user
 from flask_migrate import Migrate
 from models import db, Usuario, Categoria, Gasto, Ingreso, Empresa, Historial
+# FASE-CAJA-GENERAL-S3: el vocabulario de "con que plata se pago" y las
+# cuentas contra las que se valida. Se importan por nombre y no por modulo
+# para no cambiar el estilo del resto del archivo.
+from models import (
+    ORIGENES_FONDO,
+    ORIGEN_CAPITAL,
+    ORIGEN_FACTURACION,
+    CuentaCobro,
+)
 # `registrar_cambio` YA NO se importa de aca: la version de eva_utils usaba
 # nombres de columna que no existen y nunca fallo solo porque el `def` de
 # app.py:723 la pisaba. Se borro alla; la unica que queda es la de mas abajo.
@@ -489,6 +498,83 @@ def _categorias_de(empresa_id, tipo=None):
     return consulta.order_by(Categoria.nombre)
 
 
+def _cuentas_de(empresa_id):
+    """Las cuentas de cobro de la EMPRESA, para el selector de "de que cuenta".
+
+    Hoy son dos: la de Roman y la de Nachi (ids 40 y 41). No se filtra por
+    `activo` a proposito: si manana una cuenta se apaga, los gastos ya
+    cargados contra ella tienen que poder seguir editandose sin que la opcion
+    desaparezca del <select> y el guardado se lleve puesto el dato.
+    """
+    return (CuentaCobro.query
+            .filter_by(empresa_id=empresa_id)
+            .order_by(CuentaCobro.id)
+            .all())
+
+
+def _origen_del_form(form, empresa_id, requerido=False,
+                     por_defecto=(None, None)):
+    """FASE-CAJA-GENERAL-S3: lee "con que plata se pago" -> (origen, cuenta_id).
+
+    Levanta ValueError con el texto que se le muestra a quien carga. Es la
+    unica puerta por la que el par (origen_fondo, cuenta_pago_id) entra al
+    modelo desde una pantalla, asi que las dos reglas del CHECK se aplican aca
+    antes de que la base tenga que defenderse.
+
+    `requerido` es True en el alta y False en la edicion, y la diferencia es
+    la misma que ya distingue `_fecha_del_form`: un campo que NO vino no puede
+    significar un cambio destructivo. En la edicion, sin origen elegido se
+    devuelve `por_defecto` -- lo que la fila ya decia -- asi que:
+
+      - un gasto viejo con origen_fondo NULL se sigue pudiendo editar sin que
+        nadie tenga que inventar de que bolsillo salio, y
+      - uno que si lo tiene no lo pierde porque el formulario haya llegado
+        incompleto.
+
+    En el alta no hay nada previo que conservar y por eso ahi si es
+    obligatorio: un gasto nuevo que no dice de que plata salio deja el saldo
+    real de los socios mintiendo por omision desde el primer dia.
+    """
+    origen = (form.get('origen_fondo') or '').strip() or None
+
+    if origen is None:
+        if requerido:
+            raise ValueError('Decí con qué plata se pagó: facturación o capital')
+        return por_defecto
+
+    if origen not in ORIGENES_FONDO:
+        raise ValueError('El origen del gasto no es válido')
+
+    if origen == ORIGEN_CAPITAL:
+        # La cuenta que venga se DESCARTA en silencio, no se rechaza. El
+        # <select> de cuenta sigue en el DOM cuando se elige Capital -- se
+        # oculta, no se borra -- asi que el navegador manda igual lo que
+        # estuviera seleccionado antes de cambiar de opcion. Rechazarlo seria
+        # devolverle un error a quien carga por algo que hizo el formulario
+        # solo; el dato que importa ("salio de capital") ya quedo dicho, y el
+        # CHECK de la base sigue cubriendo cualquier otro camino de escritura.
+        return ORIGEN_CAPITAL, None
+
+    crudo = (form.get('cuenta_pago_id') or '').strip()
+    if not crudo:
+        raise ValueError('Si el gasto salió de la facturación, decí de qué '
+                         'cuenta salió')
+
+    try:
+        cuenta_id = int(crudo)
+    except ValueError:
+        cuenta = None
+    else:
+        # Por EMPRESA, igual que la categoria: nadie paga desde la cuenta de
+        # otra empresa aunque escriba el id a mano.
+        cuenta = CuentaCobro.query.filter_by(id=cuenta_id,
+                                             empresa_id=empresa_id).first()
+    if cuenta is None:
+        raise ValueError('La cuenta de pago no es válida')
+
+    return ORIGEN_FACTURACION, cuenta.id
+
+
 # ======================== DASHBOARD ========================
 
 @app.route('/dashboard')
@@ -582,13 +668,26 @@ def nuevo_gasto():
                 flash('Categoría inválida', 'danger')
                 return redirect(url_for('nuevo_gasto'))
 
+            # FASE-CAJA-GENERAL-S3: de que plata salio. Obligatorio en el
+            # alta -- un gasto nuevo que no dice de que bolsillo salio deja
+            # el saldo real de los socios mintiendo por omision desde el
+            # primer dia, y completarlo despues es adivinar.
+            try:
+                origen_fondo, cuenta_pago_id = _origen_del_form(
+                    request.form, current_user.empresa_id, requerido=True)
+            except ValueError as e:
+                flash(str(e), 'danger')
+                return redirect(url_for('nuevo_gasto'))
+
             gasto = Gasto(
                 fecha=fecha,
                 descripcion=descripcion,
                 monto=monto,
                 categoria_id=categoria.id,
                 empresa_id=current_user.empresa_id,
-                usuario_id=current_user.id
+                usuario_id=current_user.id,
+                origen_fondo=origen_fondo,
+                cuenta_pago_id=cuenta_pago_id
             )
             db.session.add(gasto)
             db.session.commit()
@@ -604,6 +703,9 @@ def nuevo_gasto():
     # CATEGORÍAS DE LA EMPRESA
     categorias = _categorias_de(current_user.empresa_id, tipo='gasto').all()
     return render_template('agregar_gasto.html', categorias=categorias,
+                           cuentas=_cuentas_de(current_user.empresa_id),
+                           origenes=ORIGENES_FONDO,
+                           origen_facturacion=ORIGEN_FACTURACION,
                            hoy=datetime.now().date().isoformat())
 
 @app.route('/gasto/editar/<int:id>', methods=['GET', 'POST'])
@@ -638,10 +740,24 @@ def editar_gasto(id):
                 flash('Categoría inválida', 'danger')
                 return redirect(url_for('editar_gasto', id=id))
 
+            # FASE-CAJA-GENERAL-S3: si el form no trae origen, se deja el
+            # que la fila ya tenia (que puede ser NULL). Es la misma regla
+            # que la fecha dos lineas mas arriba: un campo que no vino no
+            # significa "borralo".
+            try:
+                origen_fondo, cuenta_pago_id = _origen_del_form(
+                    request.form, current_user.empresa_id,
+                    por_defecto=(gasto.origen_fondo, gasto.cuenta_pago_id))
+            except ValueError as e:
+                flash(str(e), 'danger')
+                return redirect(url_for('editar_gasto', id=id))
+
             gasto.descripcion = descripcion
             gasto.monto = monto
             gasto.categoria_id = categoria.id
             gasto.fecha = fecha
+            gasto.origen_fondo = origen_fondo
+            gasto.cuenta_pago_id = cuenta_pago_id
 
             db.session.commit()
 
@@ -655,7 +771,11 @@ def editar_gasto(id):
 
     # CATEGORÍAS DE LA EMPRESA
     categorias = _categorias_de(current_user.empresa_id, tipo='gasto').all()
-    return render_template('editar_gasto.html', gasto=gasto, categorias=categorias)
+    return render_template('editar_gasto.html', gasto=gasto,
+                           categorias=categorias,
+                           cuentas=_cuentas_de(current_user.empresa_id),
+                           origenes=ORIGENES_FONDO,
+                           origen_facturacion=ORIGEN_FACTURACION)
 
 @app.route('/gasto/eliminar/<int:id>', methods=['POST'])
 @login_required
@@ -892,7 +1012,11 @@ def caja_general():
                 .filter_by(empresa_id=empresa_id)
                 .all())
     gastos = (Gasto.query
-              .options(joinedload(Gasto.categoria))
+              # FASE-CAJA-GENERAL-S3: `cuenta_pago` entra al joinedload porque
+              # `origen_legible` la lee para escribir "Facturación — Roman".
+              # Sin esto la pantalla dispara una consulta por cada gasto.
+              .options(joinedload(Gasto.categoria),
+                       joinedload(Gasto.cuenta_pago))
               .filter_by(empresa_id=empresa_id)
               .all())
 
@@ -900,12 +1024,21 @@ def caja_general():
         {'tipo': 'ingreso', 'id': i.id, 'fecha': i.fecha,
          'descripcion': i.descripcion,
          'categoria': i.categoria.nombre if i.categoria else None,
+         # El ingreso no tiene origen: es plata que ENTRA, y de donde entro ya
+         # lo dice su categoria. La clave existe igual para que la plantilla
+         # no tenga que preguntar por el tipo antes de leerla.
+         'origen': None, 'origen_puesto': True,
          'entrada': i.monto, 'salida': CERO}
         for i in ingresos
     ] + [
         {'tipo': 'gasto', 'id': g.id, 'fecha': g.fecha,
          'descripcion': g.descripcion,
          'categoria': g.categoria.nombre if g.categoria else None,
+         'origen': g.origen_legible,
+         # Aparte de la etiqueta, si la fila lo dice o no: la plantilla pinta
+         # distinto el "sin dato" para que el hueco se vea, y comparar contra
+         # el texto de la etiqueta seria atarla a como esta escrito.
+         'origen_puesto': g.origen_fondo is not None,
          'entrada': CERO, 'salida': g.monto}
         for g in gastos
     ]

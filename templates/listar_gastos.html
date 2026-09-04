@@ -190,6 +190,15 @@
             background: #252525;
         }
         
+        .origen {
+            font-size: 13px;
+        }
+        
+        .origen-vacio {
+            color: #777;
+            font-style: italic;
+        }
+        
         .acciones {
             display: flex;
             gap: 8px;
@@ -313,6 +322,7 @@
                             <th>Descripción</th>
                             <th>Monto</th>
                             <th>Categoría</th>
+                            <th>Origen</th>
                             <th>Acciones</th>
                         </tr>
                     </thead>
@@ -325,6 +335,13 @@
                                 <td>{{ gasto.descripcion }}</td>
                                 <td><strong>${{ "%.2f"|format(gasto.monto) }}</strong></td>
                                 <td>{{ gasto.categoria.nombre }}</td>
+                                <!-- FASE-CAJA-GENERAL-S3: de que plata salio.
+                                     "sin dato" es un gasto viejo al que nadie
+                                     se lo dijo; se muestra apagado para que se
+                                     vea que falta, no se esconde. -->
+                                <td class="origen {{ 'origen-vacio' if gasto.origen_fondo is none else '' }}">
+                                    {{ gasto.origen_legible }}
+                                </td>
                                 <td>
                                     <div class="acciones">
                                         <a href="{{ url_for('editar_gasto', id=gasto.id) }}" class="btn-editar">Editar</a>

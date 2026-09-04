@@ -141,6 +141,8 @@
             white-space: nowrap;
         }
         .sin-categoria { color: #d6a441; font-size: 12px; }
+        .origen { font-size: 12px; }
+        .origen-vacio { color: #d6a441; font-style: italic; }
 
         .vacio { color: #888; padding: 40px 30px; text-align: center; line-height: 1.6; }
         .vacio a { color: #7aa7d6; }
@@ -199,6 +201,7 @@
                         <th>Fecha</th>
                         <th>Concepto</th>
                         <th>Categoría</th>
+                        <th>Origen</th>
                         <th class="num">Entrada</th>
                         <th class="num">Salida</th>
                         <th class="num">Saldo</th>
@@ -215,6 +218,12 @@
                             {% else %}
                                 <span class="sin-categoria">sin categoría</span>
                             {% endif %}
+                        </td>
+                        <!-- FASE-CAJA-GENERAL-S3: solo el gasto tiene
+                             origen. El ingreso deja la celda vacia: de donde
+                             entro esa plata ya lo dice su categoria. -->
+                        <td class="origen {{ 'origen-vacio' if not m.origen_puesto else '' }}">
+                            {% if m.tipo == 'gasto' %}{{ m.origen }}{% endif %}
                         </td>
                         <td class="num col-entrada">
                             {% if m.tipo == 'ingreso' %}{{ '%.2f'|format(m.entrada) }}{% endif %}
