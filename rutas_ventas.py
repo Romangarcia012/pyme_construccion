@@ -262,6 +262,19 @@ def _armar_venta(canal, items, fecha, medio, nota):
         costo_envio_vendedor=Decimal('0.00'),
         total_impuestos=Decimal('0.00'),
         total=total,
+        # Mismo criterio que el envio, y por la misma razon: la comision de
+        # plataforma es CERO de verdad en una venta de mostrador -- no hay
+        # Tiendanube ni Mercado Libre cobrandose nada por una venta que se
+        # hizo en el local. `comision_plataforma` es nullable para poder decir
+        # "todavia no la cargue" en los pedidos de un canal, donde el numero
+        # lo carga Roman mirando la liquidacion; aca no hay liquidacion que
+        # mirar. Dejarlo en NULL mandaba toda venta presencial a "Sin margen:
+        # falta la comision de plataforma" (FASE-REPORTES-S3-MARGEN), sin
+        # ninguna pantalla que lo destrabara con sentido.
+        #
+        # No confundir con `pago.comision`, mas abajo: esa es la del PROCESADOR
+        # de pagos y sigue su propia regla.
+        comision_plataforma=Decimal('0.00'),
         nota=nota or None,
     )
     db.session.add(pedido)

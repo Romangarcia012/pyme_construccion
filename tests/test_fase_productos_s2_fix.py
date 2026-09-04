@@ -1,30 +1,35 @@
 # -*- coding: utf-8 -*-
-"""Tests de FASE-REPORTES-S3-MARGEN-FIX (el flete de la venta de mostrador).
+"""Tests de FASE-PRODUCTOS-S2-FIX (la comision de la venta de mostrador).
 
     python -m unittest discover -s tests -v
 
-`costo_envio_vendedor` es nullable para poder decir "no se sabe" cuando el
-payload de un canal no trae el dato. La venta de mostrador no tiene ese
-problema: se entrega en persona, no hay flete, y eso ya estaba dicho para el
-otro monto del envio -- `_armar_venta` fijaba `total_envio = 0.00` a mano. El
-costo del vendedor se habia quedado afuera de ese mismo criterio.
+Mismo caso que FASE-REPORTES-S3-MARGEN-FIX, un campo mas alla. Ahi se fijo
+`costo_envio_vendedor = 0.00` en la venta manual con el argumento de que el
+flete de una entrega en persona es un cero real y no un dato faltante. La
+comision de plataforma esta en la misma situacion y se habia quedado afuera:
+en una venta de mostrador no hay Tiendanube ni Mercado Libre cobrandose nada,
+porque no hubo plataforma.
 
-La consecuencia no se veia hasta que existio el reporte de margen: como exige
-los tres componentes de costo cargados, toda venta presencial caia en "Sin
-margen" para siempre, y no habia pantalla desde donde arreglarlo -- ese campo
-lo escribe el sync de Tiendanube, por donde una venta de mostrador nunca pasa.
+La consecuencia era la misma: el reporte de margen exige `comision_plataforma`
+no NULL para calcular, `_armar_venta` la dejaba NULL, y toda venta en efectivo
+caia en "Sin margen: falta la comisión de plataforma" -- un cartel que pedia
+cargar a mano un numero que estructuralmente no existe.
 
 Lo que se prueba:
 
-    venta manual              -> costo_envio_vendedor 0.00, no NULL
-    venta manual + comision   -> ya entra al reporte, con su margen calculado
-    NULL sigue significando   -> el fix es sobre el dato de origen, no sobre
-    lo mismo                     el criterio del reporte
+    venta manual          -> comision_plataforma 0.00, no NULL
+    venta manual          -> ya entra sola al reporte de margen, sin que el
+                             test le escriba ningun campo (el workaround que
+                             FASE-PRODUCTOS-S2 necesito en su setUp)
+    pago.comision         -> intacto: es otra mordida, de otro flujo
+    NULL sigue            -> el fix es sobre el dato de origen, no sobre el
+    significando lo          criterio del reporte
+    mismo
 
-El ultimo es el que impide que este fix se "arregle" mañana del lado
-equivocado: si alguien hiciera que el reporte tratara el NULL como cero, el
-pedido de Tiendanube al que le falta el flete pasaria a mostrar un margen
-inflado sin que nada lo delate.
+Los dos ultimos son los que acotan el fix: si se pusieran rojos querria decir
+que alguien lo extendio al procesador de pagos, o que "arreglo" el reporte
+tratando el NULL como cero -- y ahi cada pedido de canal sin cargar mostraria
+un margen inflado sin nada que lo delate.
 
 Como en las slices anteriores, la app se repunta a SQLite en memoria: la base
 productiva no se toca.
@@ -42,6 +47,7 @@ from app import app  # noqa: E402
 from models import (  # noqa: E402
     CanalVenta,
     Empresa,
+    Pago,
     Pedido,
     PedidoItem,
     Producto,
@@ -50,6 +56,8 @@ from models import (  # noqa: E402
 )
 
 ENGINE_PRODUCTIVO = None
+
+RUTA_VENTA = '/pedidos/manual/nuevo'
 
 
 def setUpModule():
@@ -81,11 +89,11 @@ class BaseMostrador(unittest.TestCase):
         db.drop_all()
         db.create_all()
 
-        self.empresa = Empresa(nombre='Empresa Test MARGEN-FIX')
+        self.empresa = Empresa(nombre='Empresa Test PRODUCTOS-S2-FIX')
         db.session.add(self.empresa)
         db.session.flush()
 
-        self.usuario = Usuario(nombre='Roman Test', email='margenfix@test.local',
+        self.usuario = Usuario(nombre='Roman Test', email='productosfix@test.local',
                                empresa_id=self.empresa.id, rol='admin', verificado=True)
         self.usuario.set_password('irrelevante')
         db.session.add(self.usuario)
@@ -125,7 +133,7 @@ class BaseMostrador(unittest.TestCase):
         cambia es lo que escribe `_armar_venta`, y armar el Pedido a mano en
         el test probaria el test.
         """
-        return self.client.post('/pedidos/manual/nuevo', data={
+        return self.client.post(RUTA_VENTA, data={
             'sku': [sku],
             'cantidad': [str(cantidad)],
             'precio_unitario': [precio],
@@ -157,65 +165,76 @@ class BaseMostrador(unittest.TestCase):
         return respuesta, capturado.get('context', {})
 
 
-class TestElFleteDeLaVentaManual(BaseMostrador):
+class TestLaComisionDeLaVentaManual(BaseMostrador):
     """Cero de verdad, no dato faltante."""
 
-    def test_venta_manual_costo_envio_vendedor_en_cero(self):
+    def test_venta_manual_comision_plataforma_en_cero(self):
         self.vender()
         pedido = self.unico_pedido()
 
-        self.assertIsNotNone(pedido.costo_envio_vendedor,
-                             'el flete de una venta de mostrador es 0, no "no se sabe"')
-        self.assertEqual(pedido.costo_envio_vendedor, Decimal('0.00'))
+        self.assertIsNotNone(
+            pedido.comision_plataforma,
+            'una venta de mostrador no tiene plataforma que le cobre: es 0, '
+            'no "no se sabe"')
+        self.assertEqual(pedido.comision_plataforma, Decimal('0.00'))
 
-    def test_los_dos_montos_del_envio_dicen_lo_mismo(self):
-        """`total_envio` ya estaba en 0.00: el del vendedor lo acompaña.
+    def test_los_tres_componentes_de_costo_del_pedido_nacen_cargados(self):
+        """Envio cobrado, envio pagado y comision: los tres son 0 real.
 
-        Son las dos caras del mismo envio que no existe -- lo que pago el
-        comprador y lo que le costo a la tienda -- y no hay ninguna venta
-        presencial donde uno sea cero y el otro un misterio.
+        Es la lista completa de lo que `_faltantes()` le exige al PEDIDO. El
+        componente que queda -- el costo de la mercaderia -- sigue saliendo
+        del snapshot de la linea y puede faltar con razon, si Roman todavia no
+        cargo el costo de ese producto.
         """
         self.vender()
         pedido = self.unico_pedido()
         self.assertEqual(pedido.total_envio, Decimal('0.00'))
         self.assertEqual(pedido.costo_envio_vendedor, Decimal('0.00'))
+        self.assertEqual(pedido.comision_plataforma, Decimal('0.00'))
 
-    def test_la_comision_de_plataforma_tambien_nace_en_cero(self):
-        """Esta slice la dejaba en NULL. FASE-PRODUCTOS-S2-FIX la corrigio.
+    def test_la_comision_del_procesador_no_se_toco(self):
+        """`pago.comision` es otra mordida y sigue su propia regla.
 
-        El razonamiento de aca era que la comision del canal la confirmaba
-        Roman cargando el 0 desde el listado, y que ponerla sola seria adivinar
-        por el. No lo era: una venta de mostrador no pasa por ninguna
-        plataforma, asi que no hay nada que adivinar, y el cartel que pedia
-        cargarla mandaba a buscar un dato que no existe. El caso propio esta
-        en `test_fase_productos_s2_fix.py`; esto solo deja el registro de que
-        el campo cambio de valor a proposito y no por accidente.
+        Son dos cosas distintas sobre la misma venta: lo que se queda la
+        plataforma por vender y lo que se queda el procesador por cobrar. En
+        efectivo la segunda ya era 0 porque no hay procesador; con tarjeta
+        sigue en NULL hasta que la conciliacion traiga el numero real, y este
+        fix no tiene nada que decir al respecto.
         """
-        self.vender()
-        self.assertEqual(self.unico_pedido().comision_plataforma, Decimal('0.00'))
+        self.vender(medio='efectivo')
+        self.assertEqual(Pago.query.one().comision, Decimal('0.00'))
+
+    def test_con_tarjeta_la_del_procesador_sigue_en_NULL(self):
+        """El medio de pago mueve `pago.comision`, no `comision_plataforma`."""
+        self.vender(medio='tarjeta')
+
+        self.assertIsNone(Pago.query.one().comision,
+                          'con tarjeta la comision del procesador sigue sin saberse')
+        self.assertEqual(self.unico_pedido().comision_plataforma, Decimal('0.00'),
+                         'la de plataforma es 0 igual: no depende del medio de pago')
 
 
-class TestLaVentaManualEntraAlReporte(BaseMostrador):
-    """La consecuencia visible del fix, verificada contra la pantalla."""
+class TestLaVentaManualNaceCompleta(BaseMostrador):
+    """La consecuencia visible: el reporte ya no necesita ayuda del test."""
 
-    def test_venta_manual_ahora_es_completa_para_el_reporte(self):
+    def test_venta_manual_ahora_completa_sin_setear_nada_en_el_test(self):
+        """Ni una escritura a mano antes de mirar el reporte.
+
+        FASE-PRODUCTOS-S2 tuvo que poner `comision_plataforma = 0.00` en su
+        setUp para poder testear el agrupamiento: sin eso la venta caia en
+        "faltan datos" y el test no llegaba a mirar lo que venia a mirar. Ese
+        workaround describia el bug, no el disenio -- y este es el test que
+        confirma que ya no hace falta.
+        """
         self.vender(cantidad=2, precio='2500.00')
-
-        # La comision tambien nace en 0 desde FASE-PRODUCTOS-S2-FIX: esta
-        # escritura ya es redundante y se deja para que el test siga midiendo
-        # el flete aunque aquel fix se revierta.
-        pedido = self.unico_pedido()
-        pedido.comision_plataforma = Decimal('0.00')
-        db.session.commit()
 
         respuesta, contexto = self.reporte()
         self.assertEqual(respuesta.status_code, 200)
 
-        # Ya no cae en "Sin margen"...
-        self.assertEqual(contexto['incompletos'], [])
+        self.assertEqual(contexto['incompletos'], [],
+                         'la venta nace con todo lo que el reporte exige')
 
-        # ...y el margen que muestra es el que da la cuenta: 5000.00 de
-        # ingreso menos 2400.00 de costo congelado (2 x 1200.00).
+        # 5000.00 de ingreso menos 2400.00 de costo congelado (2 x 1200.00).
         self.assertEqual(len(contexto['productos']), 1)
         fila = contexto['productos'][0]
         self.assertEqual(fila['nombre'], 'Martillo 500g')
@@ -224,21 +243,17 @@ class TestLaVentaManualEntraAlReporte(BaseMostrador):
         self.assertEqual(fila['costo_total'], Decimal('2400.00'))
         self.assertEqual(fila['ganancia'], Decimal('2600.00'))
         self.assertEqual(fila['margen_pct'], Decimal('52.0'))
-        # Sin envio de por medio, las dos columnas de margen coinciden.
-        self.assertEqual(fila['margen_mercaderia_pct'], Decimal('52.0'))
 
     def test_sin_el_fix_la_venta_manual_quedaba_afuera(self):
         """El caso que este fix arregla, reproducido volviendo el campo a NULL.
 
-        No es un test del pasado: es el que explica por que el 0.00 tiene que
-        escribirse en el origen. Con el campo en NULL el reporte hace lo
-        correcto -- se niega a inventar el flete -- y la venta desaparece de
-        todas las sumas.
+        Con la comision en NULL el reporte hace lo correcto -- se niega a
+        inventarla -- y la venta desaparece de todas las sumas. Por eso el
+        0.00 tiene que escribirse en el origen y no en el reporte.
         """
         self.vender()
         pedido = self.unico_pedido()
-        pedido.comision_plataforma = Decimal('0.00')
-        pedido.costo_envio_vendedor = None
+        pedido.comision_plataforma = None
         db.session.commit()
 
         _, contexto = self.reporte()
@@ -246,19 +261,20 @@ class TestLaVentaManualEntraAlReporte(BaseMostrador):
         self.assertEqual(len(contexto['incompletos']), 1)
         faltan = contexto['incompletos'][0]['faltan']
         self.assertEqual(len(faltan), 1)
-        self.assertIn('envío', faltan[0]['que'])
+        self.assertIn('comisión', faltan[0]['que'])
         self.assertEqual(contexto['productos'][0]['pedidos'], 0)
 
 
 class TestElCriterioDelReporteNoCambio(BaseMostrador):
     """NULL sigue siendo "no se sabe" para todos los demas."""
 
-    def test_un_pedido_de_tiendanube_sin_flete_sigue_sin_margen(self):
+    def test_un_pedido_de_tiendanube_sin_comision_sigue_sin_margen(self):
         """Lo que se corrigio es el dato de origen, no la regla que lo lee.
 
-        Si este test se pusiera rojo querria decir que alguien "arreglo" el
-        reporte tratando el NULL como cero, y entonces cada pedido al que le
-        falta el flete mostraria un margen inflado sin nada que lo delate.
+        Un pedido de canal al que le falta la comision tiene que seguir
+        cayendo en "Sin margen" hasta que Roman la cargue: ahi el numero
+        existe, solo que todavia no esta. Si este test se pusiera rojo querria
+        decir que alguien "arreglo" el reporte tratando el NULL como cero.
         """
         pedido = Pedido(empresa_id=self.empresa_id, canal_id=self.canal_tn_id,
                         id_externo='1001', numero_externo='100',
@@ -269,8 +285,8 @@ class TestElCriterioDelReporteNoCambio(BaseMostrador):
                         total_envio=Decimal('7630.00'),
                         total_impuestos=Decimal('0.00'),
                         total=Decimal('15120.00'),
-                        comision_plataforma=Decimal('248.59'),
-                        costo_envio_vendedor=None)
+                        comision_plataforma=None,
+                        costo_envio_vendedor=Decimal('7630.00'))
         db.session.add(pedido)
         db.session.flush()
         db.session.add(PedidoItem(pedido_id=pedido.id, producto_id=self.martillo.id,
@@ -285,7 +301,7 @@ class TestElCriterioDelReporteNoCambio(BaseMostrador):
 
         self.assertEqual(len(contexto['incompletos']), 1)
         self.assertEqual(contexto['incompletos'][0]['etiqueta'], '#100')
-        self.assertIn('envío', contexto['incompletos'][0]['faltan'][0]['que'])
+        self.assertIn('comisión', contexto['incompletos'][0]['faltan'][0]['que'])
 
 
 if __name__ == '__main__':

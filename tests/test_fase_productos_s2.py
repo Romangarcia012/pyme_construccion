@@ -469,17 +469,15 @@ class TestProductoManualEnReporteDeMargen(BaseAlta):
                 'sku': [sku], 'cantidad': ['1'], 'precio_unitario': [precio],
             }, follow_redirects=True)
 
-        # La comision en cero, cargada a mano. NO es parte de esta slice y por
-        # eso se escribe directo en vez de por su pantalla: el reporte de
-        # margen exige `comision_plataforma` no NULL para calcular, y la venta
-        # de mostrador la deja NULL (la carga Roman desde Ver Ventas mirando la
-        # liquidacion del canal). Sin esto los dos pedidos caen en "falta
-        # cargar datos" y el test no llegaria a mirar lo que vino a mirar, que
-        # es el AGRUPAMIENTO de un producto sin mapeo.
-        for pedido in Pedido.query.filter_by(empresa_id=self.empresa_id).all():
-            pedido.comision_plataforma = Decimal('0.00')
-        db.session.commit()
-
+        # Aca iba un workaround: escribir `comision_plataforma = 0.00` a mano
+        # en los dos pedidos, porque el reporte de margen la exige no NULL y
+        # la venta de mostrador la dejaba NULL. Sin eso los dos pedidos caian
+        # en "falta cargar datos" y el test no llegaba a mirar lo que vino a
+        # mirar, que es el AGRUPAMIENTO de un producto sin mapeo.
+        #
+        # FASE-PRODUCTOS-S2-FIX arreglo el dato en el origen -- una venta de
+        # mostrador no pasa por ninguna plataforma, la comision es 0 de verdad
+        # -- asi que la venta ya nace completa y el setUp no tiene que ayudar.
         self.texto_reporte = self.client.get(
             '/reportes/margen').get_data(as_text=True)
 
