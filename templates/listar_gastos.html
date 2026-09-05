@@ -327,9 +327,7 @@
                         </tr>
                     </thead>
                     <tbody>
-                        {% set total = 0 %}
                         {% for gasto in gastos %}
-                            {% set total = total + gasto.monto %}
                             <tr>
                                 <td>{{ gasto.fecha.strftime('%d/%m/%Y') }}</td>
                                 <td>{{ gasto.descripcion }}</td>

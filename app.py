@@ -436,6 +436,16 @@ def logout():
 # -- el rango de fechas, el combo de categorias, la fecha del alta -- tuvo que
 # dejar de mirar `current_user.id`.
 
+# El cero con el que arrancan todas las sumas de plata de este modulo, y el
+# tipo de cada monto. Decimal, nunca float: son pesos, y el error binario del
+# float genera diferencias fantasma de centavos.
+#
+# Vivia bajo el titulo CAJA GENERAL, cuando el libro era el unico que sumaba.
+# Subio aca en FASE-AUDITORIA-EXCEL-S3, cuando los totales de /gasto/listar y
+# /ingreso/listar dejaron la plantilla y pasaron a sumarse en Python.
+CERO = Decimal('0.00')
+
+
 def _filtrar_por_fecha(consulta, columna):
     """Aplica el rango ?fecha_inicio / ?fecha_fin a una consulta, EN SQL.
 
@@ -813,7 +823,19 @@ def listar_gastos():
               .order_by(Gasto.fecha.desc())
               .all())
 
-    return render_template('listar_gastos.html', gastos=gastos)
+    # FASE-AUDITORIA-EXCEL-S3: el total se suma ACA, no en la plantilla.
+    # Antes la plantilla acumulaba `{% set total = total + gasto.monto %}`
+    # DENTRO del `{% for %}`, y en Jinja un `set` dentro de un bloque es local
+    # a ese bloque: la suma se perdia en cada vuelta y el `total` que se
+    # imprimia abajo seguia siendo el 0 de la linea de arriba. La pantalla
+    # mostraba filas por cientos de miles de pesos y "Total Gastos: $0.00".
+    #
+    # No se arregla con `namespace()`: la aritmetica de plata de esta app vive
+    # en Python y en Decimal (ver `caja_general`), justamente para que sumar no
+    # dependa de las reglas de scope de un motor de plantillas.
+    total = sum((g.monto for g in gastos), CERO)
+
+    return render_template('listar_gastos.html', gastos=gastos, total=total)
 
 # ======================== INGRESOS ========================
 
@@ -972,14 +994,12 @@ def listar_ingresos():
                 .order_by(Ingreso.fecha.desc())
                 .all())
 
-    return render_template('listar_ingresos.html', ingresos=ingresos)
+    # Mismo bug y mismo arreglo que en `listar_gastos` (FASE-AUDITORIA-EXCEL-S3).
+    total = sum((i.monto for i in ingresos), CERO)
+
+    return render_template('listar_ingresos.html', ingresos=ingresos, total=total)
 
 # ======================== CAJA GENERAL ========================
-
-# El cero con el que arranca el saldo, y el tipo de todos los montos del libro.
-# Decimal, nunca float: son pesos.
-CERO = Decimal('0.00')
-
 
 @app.route('/caja-general')
 @login_required
