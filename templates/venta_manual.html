@@ -104,6 +104,21 @@
 
         .ayuda { color: #777; font-size: 12px; margin-top: 8px; }
 
+        /* FASE-CAJA-SOCIO-S3. El selector de cuenta va en su propio recuadro y
+           NO como un campo más al lado del medio de cobro: son dos preguntas
+           distintas ("cómo pagó" vs "a quién se le atribuye") y puestas una al
+           lado de la otra se leen como si fueran la misma. */
+        .bloque-cuenta {
+            margin-top: 18px;
+            padding: 14px;
+            background: #141414;
+            border: 1px solid #2a2a2a;
+            border-left: 3px solid #2d6ea3;
+            border-radius: 4px;
+        }
+        .bloque-cuenta label { color: #cbd8e3; font-size: 13px; }
+        .bloque-cuenta select { max-width: 340px; }
+
         .btn-secundario {
             background: #2a2a2a;
             color: #e0e0e0;
@@ -232,6 +247,29 @@
                         </select>
                     </div>
                 </div>
+
+                {# FASE-CAJA-SOCIO-S3. Sin cuentas de cobro cargadas no hay nada
+                   entre qué elegir: el bloque no aparece y la venta cae por
+                   canal, como siempre. #}
+                {% if cuentas %}
+                <div class="bloque-cuenta">
+                    <label for="cuenta_cobro_override">¿A qué cuenta entra esta venta?</label>
+                    <select id="cuenta_cobro_override" name="cuenta_cobro_override">
+                        {# Vacío es el default y significa "la que le toca por
+                           canal". Se nombra la cuenta para que elegir otra sea
+                           una decisión consciente, igual que en /pedidos/listar. #}
+                        <option value="">Por canal{% if cuenta_por_canal %} ({{ cuenta_por_canal }}){% endif %}</option>
+                        {% for cuenta in cuentas %}
+                            <option value="{{ cuenta.id }}" {% if enviado.cuenta == cuenta.id|string %}selected{% endif %}>{{ cuenta.etiqueta_socio }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="ayuda">No es lo mismo que el medio de cobro: el medio es <em>cómo</em>
+                       pagó el cliente, esto es <em>a quién</em> se le cuenta la plata en la caja por
+                       socio. Casi siempre va en «Por canal»; se cambia el día que la venta la cobró
+                       el otro.</p>
+                </div>
+                {% endif %}
+
                 <div style="margin-top: 15px;">
                     <label for="nota">Nota (opcional)</label>
                     <textarea id="nota" name="nota" rows="2" placeholder="Cliente: Juan Pérez">{{ enviado.nota or '' }}</textarea>

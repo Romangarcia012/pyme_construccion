@@ -16,8 +16,14 @@ puede voltear una venta ya guardada: si falla, se avisa y se sigue.
 
 FASE-CAJA-SOCIO-S2 le sumo al listado una correccion puntual: a que cuenta se
 le atribuye un pedido, cuando no es la que le tocaria por su canal. Es una
-excepcion editable a mano, no una regla nueva -- el alta de venta manual sigue
-sin preguntar nada y sigue cayendo en la cuenta de Roman.
+excepcion editable a mano, no una regla nueva.
+
+FASE-CAJA-SOCIO-S3 le agrega ese mismo control al alta: se puede elegir la
+cuenta en el momento de cargar la venta, en vez de cargarla y despues ir a
+corregirla al listado. Es el MISMO campo (`cuenta_cobro_override_id`) y la
+misma validacion; lo unico que cambia es que ahora hay dos lugares donde
+setearlo. El default sigue siendo vacio -- "la que le toca por canal" -- asi
+que quien no toca el selector carga exactamente la misma venta que antes.
 
 El blueprint se registra en app.py; ninguna ruta existente se toca.
 """
@@ -239,11 +245,14 @@ def _descontar_stock(items):
     return sobrevendidos, producto_ids
 
 
-def _armar_venta(canal, items, fecha, medio, nota):
+def _armar_venta(canal, items, fecha, medio, nota, cuenta_override_id=None):
     """Escribe pedido + items + pago, y descuenta el stock vendido.
 
     No commitea: el commit lo hace la ruta, para que las cuatro escrituras
     entren o no entren juntas.
+
+    `cuenta_override_id` llega ya validado desde la ruta y por defecto es None,
+    que es el caso normal: la venta cae en la cuenta que dice su canal.
     """
     total = sum((item['subtotal'] for item in items), Decimal('0.00'))
 
@@ -281,6 +290,11 @@ def _armar_venta(canal, items, fecha, medio, nota):
         # No confundir con `pago.comision`, mas abajo: esa es la del PROCESADOR
         # de pagos y sigue su propia regla.
         comision_plataforma=Decimal('0.00'),
+        # FASE-CAJA-SOCIO-S3. None salvo que quien carga la venta haya elegido
+        # otra cuenta en el alta. Se escribe aca, en el mismo INSERT que el
+        # resto de la venta: no hay ningun momento en el que el pedido exista
+        # atribuido al socio equivocado.
+        cuenta_cobro_override_id=cuenta_override_id,
         nota=nota or None,
     )
     db.session.add(pedido)
@@ -328,6 +342,43 @@ def _armar_venta(canal, items, fecha, medio, nota):
     return pedido, sobrevendidos, producto_ids
 
 
+def _cuenta_por_canal_manual():
+    """Como se llama la cuenta donde cae la venta manual si nadie elige otra.
+
+    Sirve para nombrarla dentro de la opcion "Por canal (...)" del selector,
+    igual que en el listado: elegir otra tiene que ser una decision consciente
+    y no a ciegas.
+
+    Consulta sin crear: `_canal_manual()` siembra el canal cuando falta, y
+    dibujar un formulario no es motivo para escribir una fila.
+    """
+    canal = CanalVenta.query.filter_by(
+        empresa_id=current_user.empresa_id, tipo=TIPO_MANUAL).first()
+    if canal is None or canal.cuenta_cobro is None:
+        return None
+    return canal.cuenta_cobro.etiqueta_socio
+
+
+def _contexto_formulario(productos, enviado):
+    """Todo lo que la plantilla del alta necesita, en un solo lugar.
+
+    Tres render_template distintos dibujan el mismo formulario: el GET, el
+    error de datos y el error inesperado. Con el contexto armado en cada uno,
+    el dia que se agrega un campo -- como el selector de cuenta de esta
+    slice -- se agrega en dos de los tres y el tercero vuelve mutilado.
+    """
+    return {
+        'productos': productos,
+        'medios': MEDIOS_COBRO,
+        'hoy': date.today().isoformat(),
+        'enviado': enviado,
+        # FASE-CAJA-SOCIO-S3. Lo unico que suma el selector de cuenta: entre
+        # cuales elegir, y como se llama la que le tocaria por canal.
+        'cuentas': _cuentas_de_cobro(current_user.empresa_id),
+        'cuenta_por_canal': _cuenta_por_canal_manual(),
+    }
+
+
 @ventas_bp.route('/manual/nuevo', methods=['GET', 'POST'])
 @login_required
 def nueva_venta_manual():
@@ -335,14 +386,18 @@ def nueva_venta_manual():
     productos = _productos_de_la_empresa()
 
     if request.method == 'GET':
-        return render_template('venta_manual.html', productos=productos,
-                               medios=MEDIOS_COBRO, hoy=date.today().isoformat(),
-                               enviado={})
+        return render_template('venta_manual.html',
+                               **_contexto_formulario(productos, {}))
 
     enviado = {
         'fecha': (request.form.get('fecha') or '').strip(),
         'medio': (request.form.get('medio') or '').strip(),
         'nota': (request.form.get('nota') or '').strip(),
+        # FASE-CAJA-SOCIO-S3. Vacio es "la que le toca por canal", que es el
+        # caso normal. Se lee aparte de 'medio' porque son dos preguntas
+        # distintas: el medio es COMO pago el cliente, esto es A QUIEN se le
+        # atribuye la plata.
+        'cuenta': (request.form.get('cuenta_cobro_override') or '').strip(),
     }
 
     try:
@@ -351,25 +406,35 @@ def nueva_venta_manual():
         if medio not in MEDIOS_VALIDOS:
             raise DatosInvalidos('Elegi un medio de cobro.')
 
+        # FASE-CAJA-SOCIO-S3. Va antes de escribir nada, y con la misma lectura
+        # que usa el listado (`_leer_cuenta_override`, mas abajo en este
+        # modulo): una cuenta que no es de esta empresa voltea la venta entera
+        # en vez de guardarla atribuida a cualquiera.
+        cuenta_override_id = _leer_cuenta_override(
+            enviado['cuenta'], 'que estas cargando',
+            {cuenta.id for cuenta in _cuentas_de_cobro(current_user.empresa_id)})
+
         items = _leer_items(request.form, {p.sku: p for p in productos})
         pedido, sobrevendidos, producto_ids = _armar_venta(
-            _canal_manual(), items, fecha, medio, enviado['nota'])
+            _canal_manual(), items, fecha, medio, enviado['nota'],
+            cuenta_override_id)
         db.session.commit()
         total_vendido = pedido.total
-    except DatosInvalidos as error:
+    except (DatosInvalidos, CuentaInvalida) as error:
+        # Las dos son lo mismo para quien esta cargando: el formulario vuelve
+        # con lo que habia escrito y el motivo arriba. Se atrapan juntas para
+        # no duplicar el render; CuentaInvalida vive con el resto del override.
         db.session.rollback()
         flash(str(error), 'error')
-        return render_template('venta_manual.html', productos=productos,
-                               medios=MEDIOS_COBRO, hoy=date.today().isoformat(),
-                               enviado=enviado)
+        return render_template('venta_manual.html',
+                               **_contexto_formulario(productos, enviado))
     except Exception:
         # Nada a medias: si algo se rompio despues del primer flush, el pedido
         # no puede quedar sin sus items o sin su pago.
         db.session.rollback()
         flash('No se pudo guardar la venta. Revisa los datos e intenta de nuevo.', 'error')
-        return render_template('venta_manual.html', productos=productos,
-                               medios=MEDIOS_COBRO, hoy=date.today().isoformat(),
-                               enviado=enviado)
+        return render_template('venta_manual.html',
+                               **_contexto_formulario(productos, enviado))
 
     flash('Venta registrada por %s %s.' % (MONEDA_DEFECTO, total_vendido), 'success')
 
@@ -637,9 +702,14 @@ def guardar_comisiones():
 # FASE-CAJA-SOCIO-S2: corregir a que cuenta va un pedido puntual
 # --------------------------------------------------------------------------
 # La regla general no se toca y no vive aca: cada canal cobra en la cuenta que
-# dice `canal_venta.cuenta_cobro_id`, y la venta manual sigue cayendo siempre
-# en la de Roman al cargarse. El formulario de alta no tiene ni va a tener un
-# selector de cuenta.
+# dice `canal_venta.cuenta_cobro_id`, y la venta manual cae en la de Roman
+# salvo que se diga otra cosa.
+#
+# FASE-CAJA-SOCIO-S3: el alta de venta manual pasa a preguntar la cuenta, con
+# este mismo campo y esta misma lectura (`_leer_cuenta_override`). Esta
+# pantalla NO se reemplaza: sigue siendo el unico lugar donde corregir una
+# venta YA cargada -- las de los canales externos, que no pasan por ningun
+# formulario, y las manuales donde se eligio mal.
 #
 # Lo que esta pantalla permite es la EXCEPCION: tres ventas manuales cargadas
 # con montos agregados entraron todas por el canal manual, y una de ellas

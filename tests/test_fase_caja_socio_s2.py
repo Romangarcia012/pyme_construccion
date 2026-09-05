@@ -207,7 +207,12 @@ class TestSinOverrideNoCambioNada(BaseOverride):
         self.assertEqual(contexto['total_general'], Decimal('18696.90'))
 
     def test_el_override_nace_en_null(self):
-        """Ningun alta lo escribe: es una correccion, no un campo del pedido."""
+        """Nace vacio: es una excepcion, no un campo obligatorio del pedido.
+
+        (FASE-CAJA-SOCIO-S3 permite elegirlo en el alta manual, pero solo si
+        se lo elige: el default de la columna sigue siendo NULL, y ningun sync
+        de canal la escribe.)
+        """
         fila = self.pedido(self.id_canal_manual, '5000.00')
         self.assertIsNone(fila.cuenta_cobro_override_id)
 
@@ -553,15 +558,22 @@ class TestDondeSeEdita(BaseOverride):
 
 
 class TestElAltaManualNoPregunta(BaseOverride):
-    """La constraint de la slice: el formulario de venta nueva no cambio."""
+    """El alta no OBLIGA a elegir cuenta: cargar sin tocar nada sigue cayendo
+    por canal.
 
-    def test_el_alta_no_ofrece_elegir_cuenta(self):
-        respuesta = self.client.get('/pedidos/manual/nuevo')
-        cuerpo = respuesta.get_data(as_text=True)
-        self.assertEqual(respuesta.status_code, 200)
-        self.assertNotIn('cuenta_cobro_override', cuerpo,
-                         'el alta sigue siendo automatica: la cuenta la pone '
-                         'el canal, y corregirla es otra pantalla')
+    Hasta FASE-CAJA-SOCIO-S3 esta clase afirmaba lo contrario -- que el alta ni
+    siquiera ofrecia el selector -- porque la unica forma de reasignar era el
+    listado. S3 lo agrego tambien al alta y esa afirmacion dejo de ser cierta a
+    proposito, no por regresion. Lo que si sigue valiendo, y es lo que se
+    prueba, es el default: quien no toca el selector carga exactamente la misma
+    venta que cargaba antes.
+    """
+
+    def test_el_alta_sin_elegir_cuenta_cae_por_canal(self):
+        self.client.get('/pedidos/manual/nuevo')  # el formulario abre igual
+        fila = self.pedido(self.id_canal_manual, '5000.00')
+        self.assertIsNone(fila.cuenta_cobro_override_id)
+        self.assertEqual(fila.cuenta_cobro_efectiva.id, self.id_cuenta_roman)
 
 
 if __name__ == '__main__':
