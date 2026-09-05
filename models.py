@@ -359,6 +359,15 @@ class Producto(db.Model):
     costo_unitario = db.Column(db.Numeric(14, 2))   # costo VIGENTE, cambia con el tiempo
     precio_lista = db.Column(db.Numeric(14, 2))
     moneda = db.Column(db.String(3), nullable=False, default='ARS')
+    # NULL no es cero: es "nadie lleva la cuenta de este producto". Lo leen
+    # asi `rutas_ventas._descontar_stock` (no descuenta), `stock_tiendanube
+    # .empujar_stock` (no informa nada a la tienda) y `rutas_devoluciones`
+    # (no suma al devolver). Cero, en cambio, afirma que no queda ninguno.
+    #
+    # El caso que obligo a escribirlo: un combo no tiene stock propio -- se
+    # arma con las unidades que ya cuentan los productos que lo componen --
+    # y llevarle un numero aparte contaba dos veces las mismas piezas. Ver
+    # la migracion b7d3e0c19a45 (FASE-AUDITORIA-EXCEL-S2).
     stock = db.Column(db.Integer)
     activo = db.Column(db.Boolean, nullable=False, default=True)
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
