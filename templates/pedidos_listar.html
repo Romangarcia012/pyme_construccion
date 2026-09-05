@@ -145,6 +145,24 @@
         }
         .comision-input:focus { outline: none; border-color: #28a745; }
 
+        /* FASE-CAJA-SOCIO-S2: el selector de cuenta. Angosto y sin color
+           propio: la fila normal es la que dice "por canal", y un campo que
+           gritara invitaria a tocarlo cuando no hace falta. */
+        .cuenta-select {
+            background: #0f0f0f;
+            border: 1px solid #3a3a3a;
+            border-radius: 4px;
+            color: #e0e0e0;
+            padding: 7px 9px;
+            font-size: 13px;
+            font-family: inherit;
+            max-width: 190px;
+        }
+        .cuenta-select:focus { outline: none; border-color: #28a745; }
+        /* Ya reasignado: se distingue de un vistazo cual de todas las filas
+           tiene una correccion encima. */
+        .cuenta-select.reasignada { border-color: #2d6ea3; color: #74b9ff; }
+
         .btn-guardar {
             background: #28a745;
             color: #fff;
@@ -158,6 +176,14 @@
             transition: 0.3s;
         }
         .btn-guardar:hover { background: #20c997; }
+
+        .btn-cuentas { background: #2d6ea3; margin-left: 10px; }
+        .btn-cuentas:hover { background: #3d8ac9; }
+
+        /* Los dos botones de guardado, uno al lado del otro. Cada uno manda su
+           propio formulario: guardar comisiones no toca las cuentas y al
+           reves. Van en la misma linea porque son la misma tabla. */
+        .barra-guardado { display: flex; flex-wrap: wrap; align-items: center; }
 
         .aclaracion {
             color: #777;
@@ -204,7 +230,7 @@
             </p>
             {% endif %}
 
-            <form method="POST" action="{{ url_for('ventas.guardar_comisiones') }}">
+            <form method="POST" action="{{ url_for('ventas.guardar_comisiones') }}" id="form-comisiones">
             <div class="tabla-container">
                 <table>
                     <thead>
@@ -215,6 +241,7 @@
                             <th class="num">Total</th>
                             <th>Medio de cobro</th>
                             <th class="num">Comisi&oacute;n plataforma</th>
+                            <th>Cuenta que cobra</th>
                             <th class="corte">Estado</th>
                             <th>Despacho</th>
                         </tr>
@@ -251,6 +278,27 @@
                                        value="{% if fila.comision_plataforma is not none %}{{ fila.comision_plataforma }}{% endif %}"
                                        aria-label="Comisión de plataforma del pedido del {{ fila.fecha.strftime('%d/%m/%Y') if fila.fecha else 'sin fecha' }}">
                             </td>
+                            <td>
+                                {# FASE-CAJA-SOCIO-S2. El select y su pedido_id van al OTRO
+                                   formulario, el de abajo, con el atributo form=: guardar
+                                   comisiones no puede reasignar cuentas de rebote ni al
+                                   revés. Es la única forma de tener dos guardados en tanda
+                                   sobre la misma tabla, porque los <form> no se anidan. #}
+                                <input type="hidden" name="pedido_id" value="{{ fila.id }}" form="form-cuentas">
+                                <select name="cuenta_cobro_override" form="form-cuentas"
+                                        class="cuenta-select {{ 'reasignada' if fila.cuenta_override_id }}"
+                                        aria-label="Cuenta que cobra el pedido del {{ fila.fecha.strftime('%d/%m/%Y') if fila.fecha else 'sin fecha' }}">
+                                    {# Vacío es lo normal y es lo que dice la regla del canal.
+                                       Se nombra la cuenta que le tocaría para que elegir otra
+                                       sea una decisión consciente y no a ciegas. #}
+                                    <option value="">
+                                        Por canal{% if fila.cuenta_por_canal %} ({{ fila.cuenta_por_canal }}){% endif %}
+                                    </option>
+                                    {% for cuenta in cuentas %}
+                                        <option value="{{ cuenta.id }}"{% if cuenta.id == fila.cuenta_override_id %} selected{% endif %}>{{ cuenta.etiqueta_socio }}</option>
+                                    {% endfor %}
+                                </select>
+                            </td>
                             <td class="corte"><span class="estado">{{ fila.estado }}</span></td>
                             <td>
                                 <span class="despacho despacho-{{ fila.despacho }}">{{ fila.despacho_etiqueta }}</span>
@@ -261,8 +309,21 @@
                 </table>
             </div>
 
-            <button type="submit" class="btn-guardar">Guardar comisiones</button>
             </form>
+
+            {# El formulario de las cuentas queda vacío a propósito: sus campos están
+               arriba, dentro de la tabla, apuntados acá con form="form-cuentas". No
+               puede envolver a la tabla porque la tabla ya está adentro del de
+               comisiones, y dos <form> no se anidan. #}
+            <form method="POST" action="{{ url_for('ventas.guardar_cuentas') }}" id="form-cuentas"></form>
+
+            {# Los dos botones quedan fuera de los dos formularios y cada uno manda el
+               suyo. Guardar comisiones no toca las cuentas y al revés: son dos
+               correcciones distintas sobre la misma tabla. #}
+            <div class="barra-guardado">
+                <button type="submit" class="btn-guardar" form="form-comisiones">Guardar comisiones</button>
+                <button type="submit" class="btn-guardar btn-cuentas" form="form-cuentas">Guardar cuentas</button>
+            </div>
 
         {% else %}
             <div class="tabla-container">
@@ -285,6 +346,18 @@
             venta no pagó comisión, como la de mostrador. Es por pedido, no por producto,
             porque depende de la forma de venta. No se confunde con la comisión del
             procesador de pagos, que es otra mordida y se carga por otro lado.
+        </p>
+
+        <p class="aclaracion">
+            La <strong>cuenta que cobra</strong> sale del canal y así queda en casi todas
+            las ventas: <em>Por canal</em> es el valor normal y no hay que tocarlo. El
+            selector existe para el caso puntual en que una venta entró por un canal pero
+            la plata la cobró el otro socio —una venta manual cargada con lo facturado en
+            Mercado Libre, por ejemplo—. Elegir una cuenta acá <strong>no cambia el canal
+            del pedido</strong> ni la regla del canal para las demás ventas: sólo mueve
+            esa venta de socio en
+            <a href="{{ url_for('reportes.caja_socio') }}">Caja por socio</a>, donde sigue
+            apareciendo bajo el canal por el que entró.
         </p>
     </div>
 </body>

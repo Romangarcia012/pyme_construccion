@@ -14,6 +14,11 @@ misma transaccion, y despues de commitear le avisa a Tiendanube el numero nuevo
 (ver `stock_tiendanube.py`). Esa es la unica llamada HTTP de este modulo, y no
 puede voltear una venta ya guardada: si falla, se avisa y se sigue.
 
+FASE-CAJA-SOCIO-S2 le sumo al listado una correccion puntual: a que cuenta se
+le atribuye un pedido, cuando no es la que le tocaria por su canal. Es una
+excepcion editable a mano, no una regla nueva -- el alta de venta manual sigue
+sin preguntar nada y sigue cayendo en la cuenta de Roman.
+
 El blueprint se registra en app.py; ninguna ruta existente se toca.
 """
 
@@ -38,6 +43,7 @@ from models import (
     DESPACHO_SI,
     DESPACHO_SIN_DATO,
     CanalVenta,
+    CuentaCobro,
     Pago,
     Pedido,
     PedidoItem,
@@ -414,6 +420,20 @@ def _medio_de_cobro(pedido, tipo_canal):
     return ''
 
 
+def _cuentas_de_cobro(empresa_id):
+    """Las cuentas de cobro de la empresa, para el selector de reasignacion.
+
+    Mismo criterio que el selector de gasto (`app._cuentas_de`): sin filtrar
+    por `activo`, porque una cuenta apagada que ya tiene pedidos reasignados
+    tiene que seguir apareciendo -- si desapareciera del <select>, el proximo
+    guardado se llevaria puesta la correccion.
+    """
+    return (CuentaCobro.query
+            .filter_by(empresa_id=empresa_id)
+            .order_by(CuentaCobro.id)
+            .all())
+
+
 @ventas_bp.route('/listar')
 @login_required
 def listar_pedidos():
@@ -433,16 +453,21 @@ def listar_pedidos():
     sync pisa en cada corrida (ver `Pedido.estado_despacho`).
     """
     pedidos = (Pedido.query
-               .options(joinedload(Pedido.canal), joinedload(Pedido.pagos))
+               .options(joinedload(Pedido.canal).joinedload(CanalVenta.cuenta_cobro),
+                        joinedload(Pedido.cuenta_cobro_override),
+                        joinedload(Pedido.pagos))
                .filter_by(empresa_id=current_user.empresa_id)
                .order_by(Pedido.fecha_pedido.desc(), Pedido.id.desc())
                .all())
+
+    cuentas = _cuentas_de_cobro(current_user.empresa_id)
 
     filas = []
     for pedido in pedidos:
         canal = pedido.canal
         tipo = canal.tipo if canal else None
         despacho = pedido.estado_despacho
+        cuenta_del_canal = canal.cuenta_cobro if canal is not None else None
         filas.append({
             # El id viaja al formulario de comision: es lo que aparea cada
             # input con su pedido, igual que el sku en el listado de costos.
@@ -463,13 +488,21 @@ def listar_pedidos():
             # Crudo, sin formatear: NULL tiene que llegar a la plantilla como
             # None para que el input quede VACIO y no muestre un 0 inventado.
             'comision_plataforma': pedido.comision_plataforma,
+            # FASE-CAJA-SOCIO-S2. Los dos van juntos a proposito: el selector
+            # tiene que poder decir "por canal (Roman)" en la opcion vacia, y
+            # para eso hace falta saber cual seria la cuenta si nadie corrigiera
+            # nada. None en el override es lo normal, no un faltante.
+            'cuenta_override_id': pedido.cuenta_cobro_override_id,
+            'cuenta_por_canal': (cuenta_del_canal.etiqueta_socio
+                                 if cuenta_del_canal is not None else None),
         })
 
     # Cuantas ventas estan esperando salir. Es lo unico que se cuenta arriba
     # porque es la unica pregunta que se hace mirando esta pantalla de apuro.
     pendientes = sum(1 for fila in filas if fila['despacho'] == DESPACHO_NO)
 
-    return render_template('pedidos_listar.html', filas=filas, pendientes=pendientes)
+    return render_template('pedidos_listar.html', filas=filas,
+                           pendientes=pendientes, cuentas=cuentas)
 
 
 # --------------------------------------------------------------------------
@@ -594,6 +627,128 @@ def guardar_comisiones():
 
     if cambios:
         flash('Se actualizo la comision de %d pedido%s.'
+              % (len(cambios), '' if len(cambios) == 1 else 's'), 'success')
+    else:
+        flash('No hubo cambios que guardar.', 'warning')
+    return redirect(url_for('ventas.listar_pedidos'))
+
+
+# --------------------------------------------------------------------------
+# FASE-CAJA-SOCIO-S2: corregir a que cuenta va un pedido puntual
+# --------------------------------------------------------------------------
+# La regla general no se toca y no vive aca: cada canal cobra en la cuenta que
+# dice `canal_venta.cuenta_cobro_id`, y la venta manual sigue cayendo siempre
+# en la de Roman al cargarse. El formulario de alta no tiene ni va a tener un
+# selector de cuenta.
+#
+# Lo que esta pantalla permite es la EXCEPCION: tres ventas manuales cargadas
+# con montos agregados entraron todas por el canal manual, y una de ellas
+# ("ventas Meli", $84.627,70) en la realidad la cobro Nachi. Sin esto habria
+# que elegir entre dos mentiras -- cambiarle el canal al pedido, o cambiarle la
+# cuenta al canal manual y mover TODAS las presenciales de socio.
+#
+# Vacio es el valor normal y significa "la que le toca por canal". No es un
+# campo que haya que completar en cada fila: se toca el dia que hay algo que
+# corregir, y el resto del tiempo se ignora.
+
+
+class CuentaInvalida(Exception):
+    """Lo que vino en el formulario no es una cuenta de esta empresa. El
+    mensaje se le muestra a quien estaba corrigiendo, asi que va en criollo."""
+
+
+def _leer_cuenta_override(texto, etiqueta, cuentas_validas):
+    """El value del <select> -> id de cuenta, o None si es "por canal".
+
+    Mismo criterio que `_leer_comision`: el vacio es un valor con significado
+    -- "sacame la correccion, que valga la regla del canal" -- y no un error.
+
+    La validacion contra `cuentas_validas` es lo unico que impide reasignar un
+    pedido a la cuenta de otra empresa: lo que llega es una cadena que mando el
+    cliente, y el <select> del servidor no es ninguna garantia.
+    """
+    texto = (texto or '').strip()
+    if not texto:
+        return None
+    try:
+        cuenta_id = int(texto)
+    except (TypeError, ValueError):
+        raise CuentaInvalida(
+            'La cuenta del pedido %s no es una cuenta valida.' % etiqueta)
+    if cuenta_id not in cuentas_validas:
+        raise CuentaInvalida(
+            'La cuenta elegida para el pedido %s no es de esta empresa.'
+            % etiqueta)
+    return cuenta_id
+
+
+@ventas_bp.route('/cuentas', methods=['POST'])
+@login_required
+def guardar_cuentas():
+    """Guarda las reasignaciones de cuenta cargadas en el listado.
+
+    Una sola tanda para toda la pantalla y todo o nada, igual que las
+    comisiones: si una fila trae basura no se guarda ninguna y el formulario
+    vuelve con el error. Un exito parcial dejaria a alguien creyendo que
+    corrigio dos ventas cuando corrigio una.
+
+    Va por su propia ruta y no dentro de `guardar_comisiones` porque son dos
+    cosas distintas sobre el mismo pedido: la comision es plata que se carga
+    mirando la liquidacion del canal; esto es a quien se le atribuye la venta.
+    Mezclarlas obligaria a guardar las dos para tocar una.
+
+    Lo que esta ruta NO toca: el canal del pedido. La venta siguio entrando por
+    donde entro, y el reporte de caja por socio sigue mostrando de que canal
+    vino aunque la plata se le cuente a otro socio.
+    """
+    # El filtro por empresa es lo unico que impide que un pedido ajeno entre
+    # por el formulario, igual que en las comisiones.
+    pedidos = {pedido.id: pedido for pedido in
+               Pedido.query.filter_by(empresa_id=current_user.empresa_id).all()}
+    cuentas_validas = {cuenta.id for cuenta
+                       in _cuentas_de_cobro(current_user.empresa_id)}
+
+    ids = request.form.getlist('pedido_id')
+    elegidas = request.form.getlist('cuenta_cobro_override')
+
+    try:
+        cambios = []
+        for indice, crudo in enumerate(ids):
+            try:
+                pedido_id = int((crudo or '').strip())
+            except (TypeError, ValueError):
+                continue
+            pedido = pedidos.get(pedido_id)
+            if pedido is None:
+                # Una fila que no corresponde a un pedido de la empresa se
+                # ignora en silencio en vez de voltear la tanda: el listado se
+                # arma desde el servidor, asi que esto solo pasa si algo cambio
+                # entre que se abrio la pantalla y se apreto guardar.
+                continue
+            texto = elegidas[indice] if indice < len(elegidas) else ''
+            cuenta_id = _leer_cuenta_override(texto, _etiqueta_pedido(pedido),
+                                              cuentas_validas)
+            if cuenta_id != pedido.cuenta_cobro_override_id:
+                cambios.append((pedido, cuenta_id))
+
+        # Recien se escribe cuando TODAS las filas pasaron la validacion, por
+        # lo mismo que en las comisiones: con la asignacion adentro del bucle,
+        # una fila mala mas abajo dejaria las anteriores ya modificadas.
+        for pedido, cuenta_id in cambios:
+            pedido.cuenta_cobro_override_id = cuenta_id
+        db.session.commit()
+    except CuentaInvalida as error:
+        db.session.rollback()
+        flash(str(error), 'error')
+        return redirect(url_for('ventas.listar_pedidos'))
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        flash('No se pudieron guardar las cuentas. Revisa los datos e '
+              'intenta de nuevo.', 'error')
+        return redirect(url_for('ventas.listar_pedidos'))
+
+    if cambios:
+        flash('Se reasigno la cuenta de %d pedido%s.'
               % (len(cambios), '' if len(cambios) == 1 else 's'), 'success')
     else:
         flash('No hubo cambios que guardar.', 'warning')

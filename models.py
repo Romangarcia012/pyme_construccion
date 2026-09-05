@@ -525,6 +525,27 @@ class Pedido(db.Model):
     # (Mercado Pago) y pertenece a otro flujo: son dos mordidas distintas
     # sobre la misma venta y se cargan por caminos distintos.
     comision_plataforma = db.Column(db.Numeric(14, 2))
+    # FASE-CAJA-SOCIO-S2: a que cuenta va ESTE pedido, cuando no es la que le
+    # tocaria por canal.
+    #
+    # La regla general no cambia y sigue viviendo en canal_venta.cuenta_cobro_id:
+    # cada canal cobra donde cobra, y la venta manual siempre cae en la cuenta
+    # de Roman. NULL -- la inmensa mayoria de las filas, y el unico valor que
+    # escribe cualquier alta -- significa exactamente eso: "la del canal".
+    #
+    # Con valor es una CORRECCION puntual, cargada a mano desde el listado de
+    # ventas. El caso que la trajo: tres ventas manuales con montos agregados,
+    # una de las cuales ("ventas Meli", $84.627,70) en la realidad es plata de
+    # Nachi, aunque haya entrado por el canal manual como todas las demas.
+    #
+    # No reclasifica el pedido: el canal_id no se toca, asi que sigue sabiendose
+    # por donde vino la venta. Lo unico que cambia es a quien se le atribuye.
+    #
+    # Nullable a proposito y sin default distinto de NULL: un cero o un id
+    # "por las dudas" convertiria una excepcion en un dato que hay que mantener
+    # en cada venta nueva, y no lo es.
+    cuenta_cobro_override_id = db.Column(
+        db.Integer, db.ForeignKey('cuenta_cobro.id'), index=True)
     # Texto libre que escribe quien carga la venta a mano ("cliente Juan Perez",
     # "pago la mitad ahora"). No lo llena ningun sync: para los canales
     # externos el equivalente ya viaja en raw_payload.
@@ -536,6 +557,10 @@ class Pedido(db.Model):
 
     empresa = db.relationship('Empresa', backref='pedidos')
     canal = db.relationship('CanalVenta', backref='pedidos')
+    # FASE-CAJA-SOCIO-S2. Sin backref: nadie pregunta "que pedidos corregidos
+    # apuntan a esta cuenta", y una coleccion mas en CuentaCobro invitaria a
+    # confundir esto con los pagos que si le entraron.
+    cuenta_cobro_override = db.relationship('CuentaCobro')
     items = db.relationship('PedidoItem', backref='pedido', cascade='all, delete-orphan')
 
     __table_args__ = (
@@ -554,6 +579,24 @@ class Pedido(db.Model):
         if self.canal is not None and self.canal.tipo == 'manual':
             return DESPACHO_MOSTRADOR
         return _despacho_de_payload(self.raw_payload)
+
+    @property
+    def cuenta_cobro_efectiva(self):
+        """A que cuenta se le atribuye este pedido. La regla, en un solo lugar.
+
+        FASE-CAJA-SOCIO-S2. Primero la correccion puntual, si la hay; si no, la
+        del canal, que es lo que pasa siempre. Puede dar None: un canal sin
+        cuenta de cobro asignada existe, y esa plata no es de nadie todavia.
+
+        El reporte de caja por socio NO llama a esta propiedad -- suma en la
+        base, sin abrir pedido por pedido -- pero aplica exactamente este
+        criterio. Si alguno de los dos cambia, el otro tiene que cambiar igual.
+        """
+        if self.cuenta_cobro_override is not None:
+            return self.cuenta_cobro_override
+        if self.canal is not None:
+            return self.canal.cuenta_cobro
+        return None
 
 
 class PedidoItem(db.Model):

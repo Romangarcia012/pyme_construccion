@@ -495,6 +495,16 @@ def margen():
 # slice. Antes habia que leer cuenta_cobro.nombre y adivinar: renombrar una
 # cuenta cambiaba la atribucion sin que nada avisara.
 #
+# Y de que cuenta se trata lo dice, para cada pedido, la misma regla de dos
+# pasos que escribe `Pedido.cuenta_cobro_efectiva` (FASE-CAJA-SOCIO-S2):
+# primero `pedido.cuenta_cobro_override_id` si esta cargado, y si no -- que es
+# lo que pasa siempre -- la cuenta del canal. El override es la excepcion
+# puntual, no una segunda regla general: existe para arreglar casos como el de
+# "ventas Meli", una venta cargada por el canal manual que en la realidad
+# cobro Nachi. Aca se resuelve en Python y no en la consulta a proposito: la
+# consulta agrupa por el override crudo y es `_destinos_del_canal` quien sabe
+# a que cuenta cobra cada canal.
+#
 # LO QUE NO SE OCULTA
 #
 #   - Un socio sin ventas sale igual, en cero, con sus canales listados. Hoy le
@@ -503,6 +513,10 @@ def margen():
 #   - Un canal cuya cuenta no tiene socio -- o que no tiene cuenta -- no se
 #     reparte entre los conocidos ni se descarta: cae en su propia fila. Plata
 #     sin dueño se ve.
+#   - Un canal con ventas corregidas aparece debajo de LOS DOS socios, una vez
+#     por cada cuenta a la que fue a parar su plata, y la linea corregida se
+#     marca como tal. Ni se esconde de donde vino la venta ni se disfraza una
+#     correccion a mano de regla del canal.
 # ==========================================================================
 
 # Como se titula la fila de lo que no se le pudo atribuir a nadie. No es un
@@ -511,37 +525,75 @@ ETIQUETA_SIN_SOCIO = 'Sin socio asignado'
 
 
 def _facturado_por_canal(empresa_id):
-    """{canal_id: suma de pedido.total}, con el mismo filtro de cancelados.
+    """{(canal_id, cuenta_override_id): (suma de pedido.total, cuantos pedidos)}.
 
     Un pedido cancelado no le entro a nadie. Se excluye con el mismo criterio
     que el resto de los reportes (`ESTADOS_NO_VENDIDOS`), asi los numeros de
     esta pantalla se pueden cruzar contra los de margen sin explicaciones.
 
+    El contador viaja al lado del monto y no en una consulta aparte: sin el, un
+    canal en cero no se distingue de un canal que vendio y devolvio todo, y son
+    dos situaciones muy distintas.
+
     Se suma en la base y no en Python a proposito: aca no hace falta abrir cada
     pedido -- no hay costos, ni items, ni snapshots -- y traerlos todos para
     sumar una columna serian miles de filas para llegar a dos numeros.
+
+    FASE-CAJA-SOCIO-S2: la clave dejo de ser el canal solo. Un mismo canal
+    puede repartir su facturacion entre dos cuentas cuando algun pedido suyo
+    tiene una correccion cargada (`pedido.cuenta_cobro_override_id`), y el
+    desglose de la pantalla tiene que poder mostrar las dos partes por
+    separado. El override viaja CRUDO -- None cuando no hay correccion -- y es
+    la funcion de arriba la que lo resuelve contra la cuenta del canal: la
+    consulta no sabe a que cuenta cobra cada canal y no hace falta que lo sepa.
     """
     filas = (db.session.query(Pedido.canal_id,
-                              func.coalesce(func.sum(Pedido.total), 0))
+                              Pedido.cuenta_cobro_override_id,
+                              func.coalesce(func.sum(Pedido.total), 0),
+                              func.count(Pedido.id))
              .filter(Pedido.empresa_id == empresa_id)
              .filter(func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS))
-             .group_by(Pedido.canal_id)
+             .group_by(Pedido.canal_id, Pedido.cuenta_cobro_override_id)
              .all())
-    return {canal_id: _decimal(total) for canal_id, total in filas}
+    return {(canal_id, override_id): (_decimal(total), int(cantidad or 0))
+            for canal_id, override_id, total, cantidad in filas}
 
 
-def _pedidos_por_canal(empresa_id):
-    """{canal_id: cuantos pedidos}, mismo filtro. Es el respaldo del monto.
+def _destinos_del_canal(canal, facturado, cuentas):
+    """A que cuentas fue a parar lo que vendio este canal, y cuanto a cada una.
 
-    Sin el contador, un canal en cero no se distingue de un canal que vendio y
-    devolvio todo, y son dos situaciones muy distintas.
+    Devuelve [(cuenta o None, total, pedidos)], siempre con la cuenta del canal
+    primero y aunque no haya vendido un peso: un canal que todavia no vendio
+    nada tiene que seguir apareciendo debajo de su socio (hoy le pasa a Mercado
+    Libre), y sacarlo de la pantalla haria ver un reparto de dos personas como
+    si fuera de una sola.
+
+    Las cuentas de mas -- si es que hay alguna -- son las correcciones puntuales
+    de FASE-CAJA-SOCIO-S2. El canal no se pierde en el camino: la venta
+    corregida aparece debajo del socio que de verdad la cobro, pero sigue
+    diciendo por que canal entro. Son las dos cosas que hay que saber de esa
+    plata, y ninguna reemplaza a la otra.
+
+    Un override que apunta a la MISMA cuenta que ya le tocaba por canal no abre
+    una fila nueva: no es una correccion, es lo mismo escrito dos veces.
     """
-    filas = (db.session.query(Pedido.canal_id, func.count(Pedido.id))
-             .filter(Pedido.empresa_id == empresa_id)
-             .filter(func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS))
-             .group_by(Pedido.canal_id)
-             .all())
-    return {canal_id: int(cantidad or 0) for canal_id, cantidad in filas}
+    cuenta_defecto = canal.cuenta_cobro
+    id_defecto = cuenta_defecto.id if cuenta_defecto is not None else None
+
+    # Orden fijo y no el que devuelva la base: el destino por defecto primero,
+    # las correcciones despues y por id de cuenta.
+    acumulado = OrderedDict([(id_defecto, (CERO, 0))])
+    for (canal_id, override_id), (total, pedidos) in sorted(
+            facturado.items(), key=lambda par: (par[0][1] or 0)):
+        if canal_id != canal.id:
+            continue
+        destino_id = id_defecto if override_id is None else override_id
+        antes_total, antes_pedidos = acumulado.get(destino_id, (CERO, 0))
+        acumulado[destino_id] = (antes_total + total, antes_pedidos + pedidos)
+
+    return [(cuentas.get(destino_id) if destino_id is not None else None,
+             total, pedidos, destino_id != id_defecto)
+            for destino_id, (total, pedidos) in acumulado.items()]
 
 
 def _gastado_por_socio(empresa_id):
@@ -622,6 +674,11 @@ def caja_socio():
     Una fila por socio con el desglose de sus canales debajo. Sin rango de
     fechas: es el acumulado, igual que el resto de los reportes de la fase.
 
+    A que socio va cada venta lo decide su cuenta EFECTIVA: la correccion
+    puntual del pedido si la tiene, la del canal si no (FASE-CAJA-SOCIO-S2).
+    El desglose sigue siendo por canal, asi que un pedido corregido cambia de
+    socio sin dejar de decir por donde entro.
+
     LA CUENTA (FASE-CAJA-GENERAL-S3)
 
         facturado    = SUM(pedido.total) de sus canales, sin cancelados
@@ -649,7 +706,6 @@ def caja_socio():
     empresa_id = current_user.empresa_id
 
     facturado = _facturado_por_canal(empresa_id)
-    contados = _pedidos_por_canal(empresa_id)
     gastado = _gastado_por_socio(empresa_id)
 
     # Se parte de los CANALES, no de los pedidos: un canal que todavia no
@@ -661,39 +717,50 @@ def caja_socio():
                .order_by(CanalVenta.id)
                .all())
 
+    # Todas las cuentas de la empresa, para poder resolver a que socio apunta
+    # un override sin abrir una consulta por pedido corregido. El filtro por
+    # empresa es el mismo de siempre: un override que apuntara a una cuenta
+    # ajena no se encuentra aca y cae en "sin socio" en vez de mostrar el
+    # nombre de una cuenta de otra empresa.
+    cuentas = {cuenta.id: cuenta for cuenta in
+               CuentaCobro.query.filter_by(empresa_id=empresa_id).all()}
+
     # Los socios del vocabulario nacen todos, en cero y en su orden, antes de
     # mirar una sola venta. Asi la pantalla no depende de que canales existan.
     socios = OrderedDict((clave, _nuevo_socio(clave, nombre))
                          for clave, nombre in SOCIOS.items())
 
     for canal in canales:
-        cuenta = canal.cuenta_cobro
-        clave = cuenta.socio if cuenta is not None else None
+        for cuenta, total, pedidos, corregido in _destinos_del_canal(
+                canal, facturado, cuentas):
+            clave = cuenta.socio if cuenta is not None else None
 
-        grupo = socios.get(clave)
-        if grupo is None:
-            # Cae aca el canal sin cuenta de cobro y el que tiene una cuenta
-            # sin socio. Los dos casos van al mismo lugar porque la respuesta
-            # es la misma -- "no se sabe de quien es esta plata" -- y el
-            # detalle de cual de los dos es se lee en la columna de la cuenta.
-            grupo = socios.get(None)
+            grupo = socios.get(clave)
             if grupo is None:
-                grupo = _nuevo_socio(None, ETIQUETA_SIN_SOCIO)
-                socios[None] = grupo
+                # Cae aca el canal sin cuenta de cobro y el que tiene una cuenta
+                # sin socio. Los dos casos van al mismo lugar porque la respuesta
+                # es la misma -- "no se sabe de quien es esta plata" -- y el
+                # detalle de cual de los dos es se lee en la columna de la cuenta.
+                grupo = socios.get(None)
+                if grupo is None:
+                    grupo = _nuevo_socio(None, ETIQUETA_SIN_SOCIO)
+                    socios[None] = grupo
 
-        total = facturado.get(canal.id, CERO)
-        pedidos = contados.get(canal.id, 0)
-
-        grupo['total'] += total
-        grupo['pedidos'] += pedidos
-        grupo['canales'].append({
-            'nombre': canal.nombre,
-            'tipo': canal.tipo,
-            'activo': canal.activo,
-            'cuenta': cuenta.nombre if cuenta is not None else None,
-            'total': total,
-            'pedidos': pedidos,
-        })
+            grupo['total'] += total
+            grupo['pedidos'] += pedidos
+            grupo['canales'].append({
+                'nombre': canal.nombre,
+                'tipo': canal.tipo,
+                'activo': canal.activo,
+                'cuenta': cuenta.nombre if cuenta is not None else None,
+                'total': total,
+                'pedidos': pedidos,
+                # FASE-CAJA-SOCIO-S2: esta linea no esta aca por la regla del
+                # canal sino porque alguien corrigio a mano esos pedidos. Se
+                # marca en la pantalla: una plata que aparece debajo de un
+                # socio que no es el que le tocaba tiene que decir por que.
+                'corregido': corregido,
+            })
 
     # El gasto se imputa DESPUES de repartir los canales, y sobre `socios`
     # directamente: un socio puede tener gastos pagados desde su cuenta sin

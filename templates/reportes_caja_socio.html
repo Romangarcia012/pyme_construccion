@@ -108,6 +108,21 @@
            el reporte de margen: no esta roto, le falta que alguien decida. */
         .aviso { color: #d6a441; }
 
+        /* FASE-CAJA-SOCIO-S2: esta linea esta debajo de este socio porque
+           alguien la corrigio a mano, no por la regla del canal. Se marca
+           distinto del canal apagado -- azul, no gris -- porque no dice lo
+           mismo: aquello es una decision sobre el canal, esto es una
+           excepcion sobre pedidos puntuales. */
+        .corregido {
+            color: #74b9ff;
+            font-size: 11px;
+            border: 1px solid #2d4a63;
+            border-radius: 4px;
+            padding: 1px 6px;
+            margin-left: 6px;
+            white-space: nowrap;
+        }
+
         /* FASE-CAJA-GENERAL-S3: los dos numeros de la fila del socio, uno
            debajo del otro. El de arriba es un total historico de ventas; el
            de abajo es la plata que deberia quedar. Se escriben distinto a
@@ -243,6 +258,10 @@
                             <td>
                                 {{ canal.nombre }}
                                 {% if not canal.activo %}<span class="apagado">canal apagado</span>{% endif %}
+                                {# La venta entró por este canal, pero se reasignó a mano
+                                   a esta cuenta. El canal se sigue viendo a propósito: no
+                                   se pierde de dónde vino la plata. #}
+                                {% if canal.corregido %}<span class="corregido">reasignado a mano</span>{% endif %}
                             </td>
                             <td>
                                 {% if canal.cuenta %}
@@ -321,6 +340,10 @@
             <a href="{{ url_for('ventas.listar_pedidos') }}">Ver Ventas</a>.
             Un socio en cero con su canal apagado no es un dato que falte: es que por
             ahí todavía no se vendió.
+            Una línea marcada <strong>reasignado a mano</strong> son pedidos que entraron
+            por ese canal pero se atribuyeron a otra cuenta desde
+            <a href="{{ url_for('ventas.listar_pedidos') }}">Ver Ventas</a>: la regla del
+            canal no cambió, se corrigieron esos pedidos y nada más.
             <br><br>
             <strong>Facturado</strong> es el total histórico de ventas por sus canales;
             <strong>tenés realmente</strong> le resta lo que ya se pagó desde esa misma
