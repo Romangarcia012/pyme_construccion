@@ -119,6 +119,30 @@
         .bloque-cuenta label { color: #cbd8e3; font-size: 13px; }
         .bloque-cuenta select { max-width: 340px; }
 
+        /* FASE-CAJA-SOCIO-S5. Verde y no azul: el bloque de al lado decide a
+           QUIÉN se le cuenta la plata, éste decide SI hay plata. Con el mismo
+           color se leerían como dos variantes de la misma pregunta. */
+        .bloque-regalo {
+            margin-top: 18px;
+            padding: 14px;
+            background: #141414;
+            border: 1px solid #2a2a2a;
+            border-left: 3px solid #3d7a4a;
+            border-radius: 4px;
+        }
+        .bloque-regalo .fila {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+        }
+        .bloque-regalo label { color: #cbe3d2; font-size: 13px; cursor: pointer; }
+        .bloque-regalo input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: #3d7a4a;
+            cursor: pointer;
+        }
+
         .btn-secundario {
             background: #2a2a2a;
             color: #e0e0e0;
@@ -269,6 +293,24 @@
                        el otro.</p>
                 </div>
                 {% endif %}
+
+                {# FASE-CAJA-SOCIO-S5. Va después de la cuenta y antes de la nota
+                   a propósito: es lo último que se decide sobre la plata, y si
+                   estuviera arriba de todo se leería como una opción del tipo de
+                   venta en vez de como la excepción que es. #}
+                <div class="bloque-regalo">
+                    <div class="fila">
+                        <input type="checkbox" id="es_regalo" name="es_regalo" value="1"
+                               {% if enviado.regalo %}checked{% endif %}>
+                        <label for="es_regalo">Esto es un regalo, no una venta</label>
+                    </div>
+                    <p class="ayuda">Un sorteo, un canje, una muestra sin cargo. El stock se
+                       descuenta igual —la mercadería sale del depósito— pero no cuenta como
+                       facturación de nadie en la caja por socio. El precio que pongas abajo
+                       es simbólico y sirve para poder cargarlo, nada más.
+                       <strong>Ojo:</strong> lo que costó esa mercadería sigue siendo un gasto
+                       real y se carga aparte, en Gastos: regalar no es gratis.</p>
+                </div>
 
                 <div style="margin-top: 15px;">
                     <label for="nota">Nota (opcional)</label>

@@ -180,6 +180,30 @@
         .btn-cuentas { background: #2d6ea3; margin-left: 10px; }
         .btn-cuentas:hover { background: #3d8ac9; }
 
+        /* FASE-CAJA-SOCIO-S5 */
+        .btn-regalos { background: #3d7a4a; margin-left: 10px; }
+        .btn-regalos:hover { background: #4e9a5e; }
+
+        .regalo-check {
+            width: 16px;
+            height: 16px;
+            accent-color: #3d7a4a;
+            cursor: pointer;
+        }
+
+        /* La fila de un regalo se lee distinto del resto: su total NO es plata
+           que entró, y sin la marca el número queda ahí como cualquier venta. */
+        .es-regalo td { background: #141a15; }
+        .marca-regalo {
+            color: #7fc08f;
+            font-size: 11px;
+            border: 1px solid #2f4a35;
+            border-radius: 4px;
+            padding: 1px 6px;
+            margin-left: 6px;
+            white-space: nowrap;
+        }
+
         /* Los dos botones de guardado, uno al lado del otro. Cada uno manda su
            propio formulario: guardar comisiones no toca las cuentas y al
            reves. Van en la misma linea porque son la misma tabla. */
@@ -242,13 +266,14 @@
                             <th>Medio de cobro</th>
                             <th class="num">Comisi&oacute;n plataforma</th>
                             <th>Cuenta que cobra</th>
+                            <th class="num">Regalo</th>
                             <th class="corte">Estado</th>
                             <th>Despacho</th>
                         </tr>
                     </thead>
                     <tbody>
                         {% for fila in filas %}
-                        <tr>
+                        <tr class="{{ 'es-regalo' if fila.es_regalo }}">
                             <td>{{ fila.fecha.strftime('%d/%m/%Y') if fila.fecha else '-' }}</td>
                             <td><span class="canal">{{ fila.canal }}</span></td>
                             <td>
@@ -259,7 +284,13 @@
                                 {% endif %}
                                 {% if fila.nota %}<span class="nota">{{ fila.nota }}</span>{% endif %}
                             </td>
-                            <td class="num">{{ fila.moneda }} {{ '%.2f'|format(fila.total) }}</td>
+                            <td class="num">
+                                {{ fila.moneda }} {{ '%.2f'|format(fila.total) }}
+                                {# El total de un regalo es un precio simbólico. Se marca
+                                   acá, pegado al número, porque es el número que se
+                                   lee mal si no dice nada. #}
+                                {% if fila.es_regalo %}<span class="marca-regalo">no facturado</span>{% endif %}
+                            </td>
                             <td>
                                 {% if fila.medio %}
                                     <span class="medio">{{ fila.medio }}</span>
@@ -299,6 +330,19 @@
                                     {% endfor %}
                                 </select>
                             </td>
+                            <td class="num">
+                                {# FASE-CAJA-SOCIO-S5. Tercer formulario, misma técnica que
+                                   el de cuentas: los campos viven acá dentro y se apuntan
+                                   con form=. Un checkbox sin tildar no viaja, así que el
+                                   pedido_id oculto es lo que dice "sobre esta fila también
+                                   estamos opinando" — sin él, destildar no se distinguiría
+                                   de que la fila no estuviera en la pantalla. #}
+                                <input type="hidden" name="pedido_id" value="{{ fila.id }}" form="form-regalos">
+                                <input type="checkbox" name="es_regalo" value="{{ fila.id }}"
+                                       class="regalo-check" form="form-regalos"
+                                       {% if fila.es_regalo %}checked{% endif %}
+                                       aria-label="El pedido del {{ fila.fecha.strftime('%d/%m/%Y') if fila.fecha else 'sin fecha' }} es un regalo, no una venta">
+                            </td>
                             <td class="corte"><span class="estado">{{ fila.estado }}</span></td>
                             <td>
                                 <span class="despacho despacho-{{ fila.despacho }}">{{ fila.despacho_etiqueta }}</span>
@@ -316,6 +360,7 @@
                puede envolver a la tabla porque la tabla ya está adentro del de
                comisiones, y dos <form> no se anidan. #}
             <form method="POST" action="{{ url_for('ventas.guardar_cuentas') }}" id="form-cuentas"></form>
+            <form method="POST" action="{{ url_for('ventas.guardar_regalos') }}" id="form-regalos"></form>
 
             {# Los dos botones quedan fuera de los dos formularios y cada uno manda el
                suyo. Guardar comisiones no toca las cuentas y al revés: son dos
@@ -323,6 +368,7 @@
             <div class="barra-guardado">
                 <button type="submit" class="btn-guardar" form="form-comisiones">Guardar comisiones</button>
                 <button type="submit" class="btn-guardar btn-cuentas" form="form-cuentas">Guardar cuentas</button>
+                <button type="submit" class="btn-guardar btn-regalos" form="form-regalos">Guardar regalos</button>
             </div>
 
         {% else %}
@@ -358,6 +404,19 @@
             esa venta de socio en
             <a href="{{ url_for('reportes.caja_socio') }}">Caja por socio</a>, donde sigue
             apareciendo bajo el canal por el que entró.
+        </p>
+
+        <p class="aclaracion">
+            <strong>Regalo</strong> marca un pedido que no fue una venta: un sorteo, un
+            canje, una muestra sin cargo. Se carga como pedido igual —con un precio
+            simbólico— porque la mercadería sale del depósito de verdad y el
+            <strong>stock se tiene que descontar</strong>; tildarlo o destildarlo
+            <strong>no devuelve ni vuelve a descontar stock</strong>. Lo único que cambia
+            es que ese total deja de contar como facturación en
+            <a href="{{ url_for('reportes.caja_socio') }}">Caja por socio</a>.
+            Lo que costó esa mercadería <strong>sigue siendo un gasto real</strong> —se
+            pagó cuando se compró— y se carga en Gastos como cualquier otro: esta marca
+            no lo genera sola, para no duplicar el que ya hayas cargado.
         </p>
     </div>
 </body>

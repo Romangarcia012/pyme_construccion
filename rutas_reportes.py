@@ -525,11 +525,30 @@ ETIQUETA_SIN_SOCIO = 'Sin socio asignado'
 
 
 def _facturado_por_canal(empresa_id):
-    """{(canal_id, cuenta_override_id): (total, pedidos, comision, sin comision)}.
+    """{(canal_id, cuenta_override_id): (facturado, pedidos, comision, sin comision)}.
+
+    `facturado` es SUM(pedido.total - pedido.total_envio): la plata de la
+    VENTA, sin el envio (FASE-CAJA-SOCIO-S5). El envio que paga el comprador
+    entra a la cuenta y sale hacia el correo el mismo dia; contarlo como
+    facturacion de un socio dice que le quedo algo de una plata que estaba de
+    paso. `total_envio` es NOT NULL y vale 0.00 en la enorme mayoria de las
+    filas -- toda venta de mostrador, donde no hay flete que cobrar --, asi
+    que para esos pedidos la resta no cambia un peso.
+
+    Lo que el envio SI deja a veces es una diferencia: cuando el correo cobra
+    mas de lo que se le cobro al comprador, esa diferencia es un costo y vive
+    en `costo_envio_vendedor`. No se toca aca -- restarla del facturado la
+    contaria como "vendio menos" cuando en realidad "gasto mas".
 
     Un pedido cancelado no le entro a nadie. Se excluye con el mismo criterio
     que el resto de los reportes (`ESTADOS_NO_VENDIDOS`), asi los numeros de
     esta pantalla se pueden cruzar contra los de margen sin explicaciones.
+
+    Un REGALO tampoco (FASE-CAJA-SOCIO-S5): no entro plata, y el pedido existe
+    nada mas que para que el stock se descontara. Sale entero -- ni total, ni
+    envio, ni comision --, y se cuenta aparte en `_regalos_por_canal` para que
+    la pantalla lo pueda decir en vez de que el pedido desaparezca sin
+    explicacion.
 
     El contador viaja al lado del monto y no en una consulta aparte: sin el, un
     canal en cero no se distingue de un canal que vendio y devolvio todo, y son
@@ -562,7 +581,8 @@ def _facturado_por_canal(empresa_id):
     """
     filas = (db.session.query(Pedido.canal_id,
                               Pedido.cuenta_cobro_override_id,
-                              func.coalesce(func.sum(Pedido.total), 0),
+                              func.coalesce(
+                                  func.sum(Pedido.total - Pedido.total_envio), 0),
                               func.count(Pedido.id),
                               func.coalesce(
                                   func.sum(Pedido.comision_plataforma), 0),
@@ -573,12 +593,38 @@ def _facturado_por_canal(empresa_id):
                               - func.count(Pedido.comision_plataforma))
              .filter(Pedido.empresa_id == empresa_id)
              .filter(func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS))
+             .filter(Pedido.es_regalo.is_(False))
              .group_by(Pedido.canal_id, Pedido.cuenta_cobro_override_id)
              .all())
     return {(canal_id, override_id): (_decimal(total), int(cantidad or 0),
                                       _decimal(comision), int(sin_comision or 0))
             for canal_id, override_id, total, cantidad, comision, sin_comision
             in filas}
+
+
+def _regalos_por_canal(empresa_id):
+    """{(canal_id, cuenta_override_id): cuantos regalos} (FASE-CAJA-SOCIO-S5).
+
+    Los pedidos que `_facturado_por_canal` deja afuera por ser regalos, con la
+    misma clave, para poder decir en la pantalla que estan y que no suman. Un
+    pedido que se cae de la cuenta sin dejar rastro obliga a que alguien
+    descubra por que el total no cierra contra el listado de ventas.
+
+    Solo el CONTADOR, no el monto. El monto de un regalo es un precio
+    simbolico que se puso para poder cargarlo -- $1 la unidad -- y mostrarlo
+    como plata invitaria a sumarlo o restarlo de algo. Lo que costo de verdad
+    esa mercaderia ya esta cargado como gasto, que es donde va.
+    """
+    filas = (db.session.query(Pedido.canal_id,
+                              Pedido.cuenta_cobro_override_id,
+                              func.count(Pedido.id))
+             .filter(Pedido.empresa_id == empresa_id)
+             .filter(func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS))
+             .filter(Pedido.es_regalo.is_(True))
+             .group_by(Pedido.canal_id, Pedido.cuenta_cobro_override_id)
+             .all())
+    return {(canal_id, override_id): int(cantidad or 0)
+            for canal_id, override_id, cantidad in filas}
 
 
 def _destinos_del_canal(canal, facturado, cuentas):
@@ -721,9 +767,10 @@ def caja_socio():
     El desglose sigue siendo por canal, asi que un pedido corregido cambia de
     socio sin dejar de decir por donde entro.
 
-    LA CUENTA (FASE-CAJA-GENERAL-S3, ampliada en FASE-CAJA-SOCIO-S4)
+    LA CUENTA (FASE-CAJA-GENERAL-S3, ampliada en S4 y S5)
 
-        facturado    = SUM(pedido.total) de sus canales, sin cancelados
+        facturado    = SUM(pedido.total - pedido.total_envio) de sus canales,
+                       sin cancelados y sin regalos
         comision     = SUM(pedido.comision_plataforma) de esos mismos pedidos
         gastado      = SUM(gasto.monto) con origen_fondo='facturacion' y
                        cuenta_pago_id apuntando a la cuenta de ese socio
@@ -738,18 +785,49 @@ def caja_socio():
 
     POR QUE LA COMISION RESTA (FASE-CAJA-SOCIO-S4)
 
-    `facturado` es lo que pago el COMPRADOR, y esta bien que lo sea: el envio
-    y los impuestos entran ahi porque despues hay que pagarlos, y son plata
-    que efectivamente pasa por la cuenta. La comision de plataforma no. Esa
-    Tiendanube o Mercado Libre ya se la quedo antes de depositar: nunca fue
-    plata del socio y no hay nada que hacer con ella. Restarla es la
+    La comision Tiendanube o Mercado Libre ya se la quedo antes de depositar:
+    nunca fue plata del socio y no hay nada que hacer con ella. Restarla es la
     diferencia entre "cuanto vendiste" y "cuanto te queda", que es justamente
     lo que esta columna dice contestar.
 
-    El bruto NO se toca por eso -- sigue siendo SUM(pedido.total) y sigue
-    mostrandose --, y la resta va escrita como una linea propia en la
-    pantalla: si solo bajara el numero final, la unica forma de entender por
-    que seria hacer la cuenta a mano.
+    La resta va escrita como una linea propia en la pantalla: si solo bajara
+    el numero final, la unica forma de entender por que seria hacer la cuenta
+    a mano.
+
+    POR QUE EL ENVIO NO SUMA (FASE-CAJA-SOCIO-S5)
+
+    Hasta S4 `facturado` era `pedido.total` -- lo que pago el COMPRADOR, con
+    el envio adentro -- y se justificaba diciendo que esa plata entra y
+    despues hay que pagarla como cualquier otro gasto. Es cierto que entra;
+    lo que no es cierto es que quede. El envio se cobra y se paga al correo,
+    y en el medio no se queda nada de nadie: mostrarlo como facturacion de un
+    socio infla su numero con plata que estaba de paso.
+
+    Por eso la formula pasa a `total - total_envio`. `total_envio` es NOT NULL
+    y vale 0.00 en toda venta de mostrador, asi que el caso comun no se mueve
+    un peso: el unico pedido que cambia es el que cobro flete.
+
+    Lo que sigue SIN restarse es `costo_envio_vendedor`, que es lo que el
+    correo le cobro al vendedor. Cuando es mas que lo que pago el comprador
+    -- pasa -- esa diferencia es un GASTO, no menos facturacion, y meterla
+    aca la haria ver como si se hubiera vendido menos.
+
+    LOS REGALOS NO SON VENTAS (FASE-CAJA-SOCIO-S5)
+
+    Un pedido marcado `es_regalo` sale entero de la suma: ni total, ni envio,
+    ni comision. El caso que lo trajo es el "Sorteo" -- mercaderia a un
+    influencer, cargada como pedido de $1 la unidad para que el stock se
+    descontara. El pedido tiene que existir porque la mercaderia se fue de
+    verdad; lo que no existio es el ingreso.
+
+    Que el pedido no sume no lo hace gratis: su costo ya esta cargado como
+    gasto y ahi se queda. Y el stock que descontó tampoco se revierte -- son
+    tres cosas distintas sobre el mismo pedido y esta pantalla solo opina
+    sobre una.
+
+    El contador de regalos se muestra igual, aunque no sume: un pedido que
+    desaparece de la cuenta sin decir nada obliga a que alguien descubra por
+    que el total no cierra contra el listado de ventas.
 
     UN PEDIDO SIN COMISION CARGADA NO RESTA CERO
 
@@ -783,6 +861,7 @@ def caja_socio():
     empresa_id = current_user.empresa_id
 
     facturado = _facturado_por_canal(empresa_id)
+    regalos = _regalos_por_canal(empresa_id)
     gastado = _gastado_por_socio(empresa_id)
 
     # Se parte de los CANALES, no de los pedidos: un canal que todavia no
@@ -879,6 +958,7 @@ def caja_socio():
                                              CERO),
                            saldo_real_total=sum((fila['saldo_real']
                                                  for fila in filas), CERO),
+                           regalos_totales=sum(regalos.values()),
                            capital_monto=capital_monto,
                            capital_cantidad=capital_cantidad,
                            sin_clasificar_monto=sin_clasificar_monto,

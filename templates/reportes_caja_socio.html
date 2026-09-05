@@ -226,7 +226,9 @@
                 <p class="subtitulo">
                     Cuánto facturó cada uno según por qué canal se vendió. Sobre
                     {{ pedidos_totales }} pedido{{ '' if pedidos_totales == 1 else 's' }}
-                    (los cancelados no cuentan).
+                    (los cancelados no cuentan{% if regalos_totales %}, y
+                    {{ regalos_totales }} regalo{{ '' if regalos_totales == 1 else 's' }}
+                    tampoco{% endif %}).
                 </p>
             </div>
         </div>
@@ -252,7 +254,7 @@
                         <td class="num">{{ socio.pedidos }}</td>
                         <td class="num">
                             <span class="facturado-historico">
-                                Facturado: {{ '%.2f'|format(socio.total) }}
+                                Facturado (sin envío): {{ '%.2f'|format(socio.total) }}
                             </span>
                             {# FASE-CAJA-SOCIO-S4: la plataforma ya se quedó esto
                                antes de depositar. Va acá arriba, entre el bruto y
@@ -302,7 +304,7 @@
                                  propio "tenes realmente". -->
                             <td class="num">
                                 <span class="facturado-historico">
-                                    Facturado: {{ '%.2f'|format(canal.total) }}
+                                    Facturado (sin envío): {{ '%.2f'|format(canal.total) }}
                                 </span>
                                 <span class="resta">
                                     − Comisión: {{ '%.2f'|format(canal.comision) }}
@@ -326,7 +328,7 @@
                         <td class="num">{{ pedidos_totales }}</td>
                         <td class="num">
                             <span class="facturado-historico">
-                                Facturado: {{ '%.2f'|format(total_general) }}
+                                Facturado (sin envío): {{ '%.2f'|format(total_general) }}
                             </span>
                             <span class="resta">
                                 − Comisión de plataforma: {{ '%.2f'|format(comision_total) }}
@@ -389,14 +391,38 @@
             </div>
         </div>
 
+        <!-- FASE-CAJA-SOCIO-S5: bloque propio y no una linea del de arriba.
+             Aquel habla de GASTOS que no le restan a nadie; esto es lo
+             contrario -- pedidos que no le SUMAN a nadie. Meterlos juntos
+             haria leer el regalo como si fuera una plata que salio. -->
+        <div class="aparte">
+            <h2>Pedidos que no son facturación</h2>
+            <div class="linea">
+                <span>
+                    Regalos (sorteos, canjes, muestras sin cargo)
+                    <span class="etiqueta-monto">
+                        {{ regalos_totales }} pedido{{ '' if regalos_totales == 1 else 's' }}
+                    </span>
+                </span>
+                <span class="monto">no suman</span>
+            </div>
+        </div>
+
         <p class="aclaracion">
             Esto es <strong>facturación</strong>, no plata conciliada: es lo que cada
             uno tendría que haber cobrado según el canal por el que se vendió, no lo
             que muestra su Mercado Pago. Si los dos números no coinciden, la diferencia
             está del lado de la cuenta, no de este reporte.
-            El monto de cada pedido es su <strong>total</strong> —lo que pagó el
-            comprador, envío e impuestos incluidos—, el mismo que figura en
-            <a href="{{ url_for('ventas.listar_pedidos') }}">Ver Ventas</a>.
+            El monto de cada pedido es su <strong>total menos el envío</strong>: lo que
+            pagó el comprador por la mercadería. El envío no suma porque entra y sale
+            —se le cobra al cliente y se le paga al correo—, así que no le queda a
+            nadie. Por eso este número es más bajo que el total que figura en
+            <a href="{{ url_for('ventas.listar_pedidos') }}">Ver Ventas</a>, que sí
+            muestra lo que pagó el comprador con el envío adentro.
+            Un pedido marcado <strong>Regalo</strong> no suma nada acá —ni total ni
+            envío—: no entró plata. Existe como pedido porque la mercadería salió del
+            depósito y el stock se descontó, y lo que costó está cargado como gasto,
+            que es donde va: regalar no es gratis, pero tampoco es facturar.
             Un socio en cero con su canal apagado no es un dato que falte: es que por
             ahí todavía no se vendió.
             Una línea marcada <strong>reasignado a mano</strong> son pedidos que entraron

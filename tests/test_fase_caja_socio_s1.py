@@ -267,12 +267,21 @@ class TestLaSuma(BaseCaja):
         self.assertEqual(roman['pedidos'], 2)
         self.assertEqual(contexto['total_general'], Decimal('19763.80'))
 
-    def test_suma_el_total_del_pedido_y_no_otro_monto(self):
-        """`total` es lo que pago el comprador; es lo que le entra al socio.
+    def test_suma_el_total_del_pedido_sin_el_envio(self):
+        """Lo que pago el comprador POR LA MERCADERIA, que es lo que queda.
 
         Este pedido tiene los otros montos cargados y distintos a proposito: si
         el reporte sumara total_bruto (7490.00) o el ingreso neto del reporte
         de margen, el numero no daria.
+
+        FASE-CAJA-SOCIO-S5 le cambio el numero esperado a este test, y es el
+        unico de S1 que se movio. Hasta entonces se afirmaba `total` pelado
+        (13696.90) con el argumento de que el envio tambien es plata que entra
+        a la cuenta. Entra, pero no queda: se cobra y se le paga al correo, asi
+        que contarlo como facturacion de Roman le inflaba el numero con plata
+        de paso. El resto de S1 -- de quien es cada canal, que los cancelados
+        no suman, como se desglosa -- no cambio: esto es la definicion de UN
+        numero, no el reparto.
         """
         fila = self.pedido(self.id_canal_tn, '13696.90')
         fila.total_bruto = Decimal('7490.00')
@@ -281,7 +290,8 @@ class TestLaSuma(BaseCaja):
         db.session.commit()
 
         _, contexto = self.reporte()
-        self.assertEqual(self.socio(contexto, 'roman')['total'], Decimal('13696.90'))
+        self.assertEqual(self.socio(contexto, 'roman')['total'],
+                         Decimal('6066.90'))
 
     def test_cancelados_no_suman(self):
         """Mismo filtro que los reportes anteriores: lo cancelado no entro."""

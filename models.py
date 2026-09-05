@@ -4,6 +4,11 @@ from werkzeug.security import generate_password_hash, check_password_hash
 from collections import OrderedDict
 from datetime import datetime
 
+# FASE-CAJA-SOCIO-S5: para el server_default de `pedido.es_regalo`. Va como
+# texto SQL y no como False de Python porque el default lo tiene que escribir
+# la BASE en las filas que ya existen, no SQLAlchemy en las nuevas.
+from sqlalchemy import text as sa_text
+
 db = SQLAlchemy()
 
 class Usuario(UserMixin, db.Model):
@@ -555,6 +560,28 @@ class Pedido(db.Model):
     # en cada venta nueva, y no lo es.
     cuenta_cobro_override_id = db.Column(
         db.Integer, db.ForeignKey('cuenta_cobro.id'), index=True)
+    # FASE-CAJA-SOCIO-S5: este pedido es un REGALO, no una venta.
+    #
+    # El caso que lo trajo: el "Sorteo" -- cuatro tarjeteros a un influencer,
+    # cargados como pedido de $1 por unidad para que el stock se descontara.
+    # El pedido tiene que existir (la mercaderia salio del deposito de
+    # verdad), pero no entro un peso: contarlo como facturacion dice que si.
+    #
+    # Es un dato del NEGOCIO y por eso es una columna y no una convencion
+    # sobre `nota`. Con la nota, "Sorteo" excluia el pedido y "sorteo IG" no,
+    # sin que nada avisara; y el total simbolico tampoco sirve de senal --
+    # $4 es una venta chica perfectamente posible.
+    #
+    # Lo que NO cambia por estar marcado: el stock ya descontado se queda
+    # descontado (la mercaderia se fue igual) y el costo de esa mercaderia
+    # sigue siendo un gasto real -- se pago cuando se compro. Regalar no es
+    # gratis: lo unico que no ocurrio es el ingreso.
+    #
+    # NOT NULL con default False: "no es un regalo" es la respuesta para la
+    # inmensa mayoria de las filas y no es un dato que falte, asi que un
+    # nullable aca solo abriria un tercer estado sin significado.
+    es_regalo = db.Column(db.Boolean, nullable=False, default=False,
+                          server_default=sa_text('false'))
     # Texto libre que escribe quien carga la venta a mano ("cliente Juan Perez",
     # "pago la mitad ahora"). No lo llena ningun sync: para los canales
     # externos el equivalente ya viaja en raw_payload.

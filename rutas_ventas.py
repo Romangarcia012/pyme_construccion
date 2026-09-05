@@ -245,7 +245,8 @@ def _descontar_stock(items):
     return sobrevendidos, producto_ids
 
 
-def _armar_venta(canal, items, fecha, medio, nota, cuenta_override_id=None):
+def _armar_venta(canal, items, fecha, medio, nota, cuenta_override_id=None,
+                 es_regalo=False):
     """Escribe pedido + items + pago, y descuenta el stock vendido.
 
     No commitea: el commit lo hace la ruta, para que las cuatro escrituras
@@ -253,6 +254,13 @@ def _armar_venta(canal, items, fecha, medio, nota, cuenta_override_id=None):
 
     `cuenta_override_id` llega ya validado desde la ruta y por defecto es None,
     que es el caso normal: la venta cae en la cuenta que dice su canal.
+
+    `es_regalo` (FASE-CAJA-SOCIO-S5) marca que esto no es una venta. Lo unico
+    que cambia es la marca: el pedido se escribe igual, con sus items y su
+    precio simbolico, y el stock se descuenta igual -- la mercaderia se va del
+    deposito lo mismo. Quien decide que hacer con esa marca es cada reporte;
+    hoy la mira /reportes/caja-socio, para no contar como facturacion una
+    plata que nunca entro.
     """
     total = sum((item['subtotal'] for item in items), Decimal('0.00'))
 
@@ -295,6 +303,9 @@ def _armar_venta(canal, items, fecha, medio, nota, cuenta_override_id=None):
         # resto de la venta: no hay ningun momento en el que el pedido exista
         # atribuido al socio equivocado.
         cuenta_cobro_override_id=cuenta_override_id,
+        # FASE-CAJA-SOCIO-S5. Se escribe en el mismo INSERT que el resto: un
+        # regalo no pasa por un momento en el que figure como venta.
+        es_regalo=bool(es_regalo),
         nota=nota or None,
     )
     db.session.add(pedido)
@@ -398,6 +409,10 @@ def nueva_venta_manual():
         # distintas: el medio es COMO pago el cliente, esto es A QUIEN se le
         # atribuye la plata.
         'cuenta': (request.form.get('cuenta_cobro_override') or '').strip(),
+        # FASE-CAJA-SOCIO-S5. Un checkbox sin tildar no viaja en el POST, asi
+        # que la ausencia ES el "no" -- no hace falta validar nada ni hay
+        # forma de que llegue un tercer valor.
+        'regalo': bool(request.form.get('es_regalo')),
     }
 
     try:
@@ -417,7 +432,7 @@ def nueva_venta_manual():
         items = _leer_items(request.form, {p.sku: p for p in productos})
         pedido, sobrevendidos, producto_ids = _armar_venta(
             _canal_manual(), items, fecha, medio, enviado['nota'],
-            cuenta_override_id)
+            cuenta_override_id, enviado['regalo'])
         db.session.commit()
         total_vendido = pedido.total
     except (DatosInvalidos, CuentaInvalida) as error:
@@ -436,7 +451,14 @@ def nueva_venta_manual():
         return render_template('venta_manual.html',
                                **_contexto_formulario(productos, enviado))
 
-    flash('Venta registrada por %s %s.' % (MONEDA_DEFECTO, total_vendido), 'success')
+    # FASE-CAJA-SOCIO-S5. El mensaje dice cual de las dos cosas se guardo: un
+    # "Venta registrada por $4" despues de tildar Regalo haria dudar de si la
+    # marca entro, que es justo lo que no se quiere despues de cargar algo raro.
+    if enviado['regalo']:
+        flash('Regalo registrado. El stock se descontó y no cuenta como '
+              'facturación.', 'success')
+    else:
+        flash('Venta registrada por %s %s.' % (MONEDA_DEFECTO, total_vendido), 'success')
 
     # Todo lo que sigue pasa DESPUES del commit y a proposito: la venta ya esta
     # guardada y ninguno de estos avisos la puede deshacer.
@@ -560,6 +582,11 @@ def listar_pedidos():
             'cuenta_override_id': pedido.cuenta_cobro_override_id,
             'cuenta_por_canal': (cuenta_del_canal.etiqueta_socio
                                  if cuenta_del_canal is not None else None),
+            # FASE-CAJA-SOCIO-S5. Se muestra en TODA fila, no solo en las
+            # manuales: un pedido de un canal externo tambien puede terminar
+            # siendo un regalo (un canje, una reposicion sin cargo), y
+            # esconder el checkbox ahi obligaria a volver a la consola.
+            'es_regalo': pedido.es_regalo,
         })
 
     # Cuantas ventas estan esperando salir. Es lo unico que se cuenta arriba
@@ -819,6 +846,82 @@ def guardar_cuentas():
 
     if cambios:
         flash('Se reasigno la cuenta de %d pedido%s.'
+              % (len(cambios), '' if len(cambios) == 1 else 's'), 'success')
+    else:
+        flash('No hubo cambios que guardar.', 'warning')
+    return redirect(url_for('ventas.listar_pedidos'))
+
+
+# --------------------------------------------------------------------------
+# FASE-CAJA-SOCIO-S5: esto fue un regalo, no una venta
+# --------------------------------------------------------------------------
+# La tercera cosa que se corrige por tanda desde este listado, y por su propia
+# ruta por lo mismo que las otras dos: son preguntas distintas sobre el mismo
+# pedido y guardar una no tiene por que tocar las demas.
+#
+# No hay validacion de vocabulario que hacer -- un checkbox tiene dos estados
+# y los dos son validos --, asi que no hay excepcion propia. Lo unico que se
+# valida es lo de siempre: que el pedido sea de esta empresa.
+
+
+@ventas_bp.route('/regalos', methods=['POST'])
+@login_required
+def guardar_regalos():
+    """Guarda que pedidos son regalos y cuales no.
+
+    Todo o nada como las otras dos tandas, aunque aca no haya nada que pueda
+    fallar por dato invalido: lo que se juega es la consistencia de la
+    pantalla, no la validacion.
+
+    LO QUE NO HACE, Y ES A PROPOSITO
+
+    Marcar un pedido como regalo no devuelve el stock ni borra su pago: la
+    mercaderia salio del deposito igual y el pedido siguio existiendo. Y
+    desmarcarlo tampoco descuenta nada de nuevo. Lo unico que cambia es si esa
+    plata cuenta como facturacion en /reportes/caja-socio.
+
+    Tampoco carga el costo como gasto. Regalar no es gratis -- la mercaderia
+    se pago cuando se compro --, pero ese gasto se carga donde se cargan todos
+    y no lo puede inventar esta ruta: no sabe con que plata se pago ni en que
+    fecha, y un gasto automatico se sumaria al que ya se cargo a mano.
+    """
+    # El checkbox sin tildar NO viaja en el POST, asi que la lista de tildados
+    # es lo unico que llega. Los `pedido_id` ocultos son los que dicen sobre
+    # que filas estamos opinando: sin ellos, "no vino tildado" no se
+    # distinguiria de "esa fila no estaba en la pantalla".
+    ids_en_pantalla = request.form.getlist('pedido_id')
+    tildados = set(request.form.getlist('es_regalo'))
+
+    pedidos = {pedido.id: pedido for pedido in
+               Pedido.query.filter_by(empresa_id=current_user.empresa_id).all()}
+
+    try:
+        cambios = []
+        for crudo in ids_en_pantalla:
+            crudo = (crudo or '').strip()
+            try:
+                pedido_id = int(crudo)
+            except (TypeError, ValueError):
+                continue
+            pedido = pedidos.get(pedido_id)
+            if pedido is None:
+                # Igual que en las otras dos tandas: una fila que no es de
+                # esta empresa se ignora en vez de voltear el guardado.
+                continue
+            quiere = crudo in tildados
+            if quiere != bool(pedido.es_regalo):
+                cambios.append((pedido, quiere))
+
+        for pedido, quiere in cambios:
+            pedido.es_regalo = quiere
+        db.session.commit()
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        flash('No se pudieron guardar los regalos. Intenta de nuevo.', 'error')
+        return redirect(url_for('ventas.listar_pedidos'))
+
+    if cambios:
+        flash('Se actualizo la marca de regalo en %d pedido%s.'
               % (len(cambios), '' if len(cambios) == 1 else 's'), 'success')
     else:
         flash('No hubo cambios que guardar.', 'warning')
