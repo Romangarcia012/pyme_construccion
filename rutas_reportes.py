@@ -525,7 +525,7 @@ ETIQUETA_SIN_SOCIO = 'Sin socio asignado'
 
 
 def _facturado_por_canal(empresa_id):
-    """{(canal_id, cuenta_override_id): (suma de pedido.total, cuantos pedidos)}.
+    """{(canal_id, cuenta_override_id): (total, pedidos, comision, sin comision)}.
 
     Un pedido cancelado no le entro a nadie. Se excluye con el mismo criterio
     que el resto de los reportes (`ESTADOS_NO_VENDIDOS`), asi los numeros de
@@ -546,23 +546,46 @@ def _facturado_por_canal(empresa_id):
     separado. El override viaja CRUDO -- None cuando no hay correccion -- y es
     la funcion de arriba la que lo resuelve contra la cuenta del canal: la
     consulta no sabe a que cuenta cobra cada canal y no hace falta que lo sepa.
+
+    FASE-CAJA-SOCIO-S4: la comision de plataforma sale de ESTA consulta y no
+    de una aparte. El filtro que decide que pedido cuenta -- empresa y estado
+    no cancelado -- es el mismo que el del monto facturado, y escribirlo dos
+    veces es la forma de que un dia deje de serlo: la comision restaria sobre
+    un conjunto de pedidos distinto del que se facturo y la resta daria
+    cualquier cosa sin que nada avisara.
+
+    Los pedidos SIN comision cargada viajan contados aparte y no sumados como
+    cero. `sum()` ignora los NULL, asi que el monto ya sale bien; lo que se
+    perderia sin ese contador es saber si un cero es "no hubo comision" o
+    "todavia no la cargo nadie", que es la unica diferencia que importa cuando
+    el numero de abajo dice cuanta plata te queda.
     """
     filas = (db.session.query(Pedido.canal_id,
                               Pedido.cuenta_cobro_override_id,
                               func.coalesce(func.sum(Pedido.total), 0),
-                              func.count(Pedido.id))
+                              func.count(Pedido.id),
+                              func.coalesce(
+                                  func.sum(Pedido.comision_plataforma), 0),
+                              # count() de una columna no cuenta los NULL: la
+                              # resta contra el total de la fila es cuantos
+                              # pedidos no tienen la comision cargada.
+                              func.count(Pedido.id)
+                              - func.count(Pedido.comision_plataforma))
              .filter(Pedido.empresa_id == empresa_id)
              .filter(func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS))
              .group_by(Pedido.canal_id, Pedido.cuenta_cobro_override_id)
              .all())
-    return {(canal_id, override_id): (_decimal(total), int(cantidad or 0))
-            for canal_id, override_id, total, cantidad in filas}
+    return {(canal_id, override_id): (_decimal(total), int(cantidad or 0),
+                                      _decimal(comision), int(sin_comision or 0))
+            for canal_id, override_id, total, cantidad, comision, sin_comision
+            in filas}
 
 
 def _destinos_del_canal(canal, facturado, cuentas):
     """A que cuentas fue a parar lo que vendio este canal, y cuanto a cada una.
 
-    Devuelve [(cuenta o None, total, pedidos)], siempre con la cuenta del canal
+    Devuelve [(cuenta o None, total, pedidos, comision, sin_comision,
+    corregido)], siempre con la cuenta del canal
     primero y aunque no haya vendido un peso: un canal que todavia no vendio
     nada tiene que seguir apareciendo debajo de su socio (hoy le pasa a Mercado
     Libre), y sacarlo de la pantalla haria ver un reparto de dos personas como
@@ -576,24 +599,36 @@ def _destinos_del_canal(canal, facturado, cuentas):
 
     Un override que apunta a la MISMA cuenta que ya le tocaba por canal no abre
     una fila nueva: no es una correccion, es lo mismo escrito dos veces.
+
+    FASE-CAJA-SOCIO-S4: la comision viaja con el monto por el mismo camino y
+    hasta el mismo destino. Una venta reasignada a mano se la cobro otro socio,
+    y la mordida que la plataforma le hizo a esa venta tambien es de el: si la
+    comision se quedara en el canal, el socio corregido se llevaria la
+    facturacion entera sin el costo de haberla hecho.
     """
     cuenta_defecto = canal.cuenta_cobro
     id_defecto = cuenta_defecto.id if cuenta_defecto is not None else None
 
+    vacio = (CERO, 0, CERO, 0)
+
     # Orden fijo y no el que devuelva la base: el destino por defecto primero,
     # las correcciones despues y por id de cuenta.
-    acumulado = OrderedDict([(id_defecto, (CERO, 0))])
-    for (canal_id, override_id), (total, pedidos) in sorted(
+    acumulado = OrderedDict([(id_defecto, vacio)])
+    for (canal_id, override_id), (total, pedidos, comision, sin_comision) in sorted(
             facturado.items(), key=lambda par: (par[0][1] or 0)):
         if canal_id != canal.id:
             continue
         destino_id = id_defecto if override_id is None else override_id
-        antes_total, antes_pedidos = acumulado.get(destino_id, (CERO, 0))
-        acumulado[destino_id] = (antes_total + total, antes_pedidos + pedidos)
+        antes = acumulado.get(destino_id, vacio)
+        acumulado[destino_id] = (antes[0] + total,
+                                 antes[1] + pedidos,
+                                 antes[2] + comision,
+                                 antes[3] + sin_comision)
 
     return [(cuentas.get(destino_id) if destino_id is not None else None,
-             total, pedidos, destino_id != id_defecto)
-            for destino_id, (total, pedidos) in acumulado.items()]
+             total, pedidos, comision, sin_comision, destino_id != id_defecto)
+            for destino_id, (total, pedidos, comision, sin_comision)
+            in acumulado.items()]
 
 
 def _gastado_por_socio(empresa_id):
@@ -654,12 +689,19 @@ def _nuevo_socio(clave, nombre):
         # `total` es lo FACTURADO: la suma de pedido.total de sus canales.
         # Es un total historico de ventas y no cambia con esta slice.
         'total': CERO,
+        # FASE-CAJA-SOCIO-S4: lo que la plataforma ya se quedo de esa
+        # facturacion. Es plata que nunca llego a la cuenta, asi que resta.
+        'comision': CERO,
+        # Cuantos de sus pedidos no tienen la comision cargada. No es un cero:
+        # es un dato que falta, y por eso se cuenta en vez de asumirse.
+        'sin_comision': 0,
         # FASE-CAJA-GENERAL-S3: lo que ya salio de esa misma cuenta.
         'gastado': CERO,
         'gastos': 0,
-        # facturado - gastado_de_ahi. Es la plata que deberia quedar en la
-        # cuenta si nadie la toco por fuera del sistema. Puede dar negativo, y
-        # que se vea es el punto: significa que se pago mas de lo que entro.
+        # facturado - comision - gastado_de_ahi. Es la plata que deberia quedar
+        # en la cuenta si nadie la toco por fuera del sistema. Puede dar
+        # negativo, y que se vea es el punto: significa que se pago mas de lo
+        # que entro.
         'saldo_real': CERO,
         'pedidos': 0,
         'canales': [],
@@ -679,19 +721,54 @@ def caja_socio():
     El desglose sigue siendo por canal, asi que un pedido corregido cambia de
     socio sin dejar de decir por donde entro.
 
-    LA CUENTA (FASE-CAJA-GENERAL-S3)
+    LA CUENTA (FASE-CAJA-GENERAL-S3, ampliada en FASE-CAJA-SOCIO-S4)
 
         facturado    = SUM(pedido.total) de sus canales, sin cancelados
+        comision     = SUM(pedido.comision_plataforma) de esos mismos pedidos
         gastado      = SUM(gasto.monto) con origen_fondo='facturacion' y
                        cuenta_pago_id apuntando a la cuenta de ese socio
-        saldo_real   = facturado - gastado
+        saldo_real   = facturado - comision - gastado
 
-    Hasta esta slice la pantalla mostraba solo el primero, y ese numero se
-    leia como "lo que tiene Roman" cuando en realidad es "lo que Roman
+    Hasta CAJA-GENERAL-S3 la pantalla mostraba solo el primero, y ese numero
+    se leia como "lo que tiene Roman" cuando en realidad es "lo que Roman
     facturo desde siempre". Son dos cosas muy distintas en cuanto se paga el
     primer proveedor. Por eso van los dos juntos, uno debajo del otro: el
     historico no se saca -- sigue haciendo falta para cuadrar contra las
     ventas -- pero deja de ser el unico numero de la fila.
+
+    POR QUE LA COMISION RESTA (FASE-CAJA-SOCIO-S4)
+
+    `facturado` es lo que pago el COMPRADOR, y esta bien que lo sea: el envio
+    y los impuestos entran ahi porque despues hay que pagarlos, y son plata
+    que efectivamente pasa por la cuenta. La comision de plataforma no. Esa
+    Tiendanube o Mercado Libre ya se la quedo antes de depositar: nunca fue
+    plata del socio y no hay nada que hacer con ella. Restarla es la
+    diferencia entre "cuanto vendiste" y "cuanto te queda", que es justamente
+    lo que esta columna dice contestar.
+
+    El bruto NO se toca por eso -- sigue siendo SUM(pedido.total) y sigue
+    mostrandose --, y la resta va escrita como una linea propia en la
+    pantalla: si solo bajara el numero final, la unica forma de entender por
+    que seria hacer la cuenta a mano.
+
+    UN PEDIDO SIN COMISION CARGADA NO RESTA CERO
+
+    Es el mismo criterio NULL != 0 de todo el modulo, aplicado al mismo lugar
+    donde ya se ven los gastos sin origen: el pedido se cuenta aparte y el
+    faltante se muestra. Un cero silencioso diria "esta venta no pago
+    comision", que es una afirmacion, cuando el dato real es "todavia nadie
+    la cargo". La diferencia se nota en el saldo: mientras haya pedidos sin
+    comision, el "tenes realmente" esta por ARRIBA de lo que va a terminar
+    siendo, y la pantalla lo dice en vez de dejar que se descubra despues.
+
+    ESTO NO ES EL REPORTE DE MARGEN
+
+    El de margen tambien resta comision, y no comparten una linea de codigo a
+    proposito: aquel contesta "cuanto gane con este producto" y para eso
+    necesita ademas el costo de la mercaderia y el flete, y descarta el pedido
+    entero si le falta uno de los tres. Este contesta "cuanta plata hay en la
+    cuenta", donde el costo de la mercaderia no viene al caso -- ya se pago, y
+    si se pago desde esta cuenta ya esta contado como gasto.
 
     LO QUE NO RESTA
 
@@ -731,8 +808,8 @@ def caja_socio():
                          for clave, nombre in SOCIOS.items())
 
     for canal in canales:
-        for cuenta, total, pedidos, corregido in _destinos_del_canal(
-                canal, facturado, cuentas):
+        for (cuenta, total, pedidos, comision, sin_comision,
+             corregido) in _destinos_del_canal(canal, facturado, cuentas):
             clave = cuenta.socio if cuenta is not None else None
 
             grupo = socios.get(clave)
@@ -748,6 +825,8 @@ def caja_socio():
 
             grupo['total'] += total
             grupo['pedidos'] += pedidos
+            grupo['comision'] += comision
+            grupo['sin_comision'] += sin_comision
             grupo['canales'].append({
                 'nombre': canal.nombre,
                 'tipo': canal.tipo,
@@ -755,6 +834,8 @@ def caja_socio():
                 'cuenta': cuenta.nombre if cuenta is not None else None,
                 'total': total,
                 'pedidos': pedidos,
+                'comision': comision,
+                'sin_comision': sin_comision,
                 # FASE-CAJA-SOCIO-S2: esta linea no esta aca por la regla del
                 # canal sino porque alguien corrigio a mano esos pedidos. Se
                 # marca en la pantalla: una plata que aparece debajo de un
@@ -774,7 +855,8 @@ def caja_socio():
         grupo['gastos'] += cantidad
 
     for grupo in socios.values():
-        grupo['saldo_real'] = grupo['total'] - grupo['gastado']
+        grupo['saldo_real'] = (grupo['total'] - grupo['comision']
+                               - grupo['gastado'])
 
     filas = list(socios.values())
 
@@ -789,6 +871,10 @@ def caja_socio():
                            total_general=sum((fila['total'] for fila in filas),
                                              CERO),
                            pedidos_totales=sum(fila['pedidos'] for fila in filas),
+                           comision_total=sum((fila['comision']
+                                               for fila in filas), CERO),
+                           sin_comision_total=sum(fila['sin_comision']
+                                                  for fila in filas),
                            gastado_total=sum((fila['gastado'] for fila in filas),
                                              CERO),
                            saldo_real_total=sum((fila['saldo_real']

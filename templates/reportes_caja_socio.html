@@ -135,9 +135,22 @@
             font-weight: 400;
         }
 
+        /* FASE-CAJA-SOCIO-S4: cada cosa que se le resta al bruto, escrita en
+           su propia linea y con el signo adelante. El saldo de abajo sale de
+           estas restas; si solo se viera el resultado, la unica forma de
+           entender por que bajo seria rehacer la cuenta a mano. */
+        .resta {
+            display: block;
+            color: #999;
+            font-size: 13px;
+            font-weight: 400;
+        }
+
         .saldo-real {
             display: block;
-            margin-top: 2px;
+            margin-top: 4px;
+            padding-top: 4px;
+            border-top: 1px solid #333;
         }
 
         /* Un saldo negativo se paga de algun lado: o entro plata que no esta
@@ -226,8 +239,7 @@
                         <th>Socio / canal</th>
                         <th>Cuenta de cobro</th>
                         <th class="num">Pedidos</th>
-                        <th class="num">Gastado de ahí</th>
-                        <th class="num">Facturado / Tenés realmente</th>
+                        <th class="num">De lo facturado a lo que te queda</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -239,14 +251,25 @@
                         <td></td>
                         <td class="num">{{ socio.pedidos }}</td>
                         <td class="num">
-                            {{ '%.2f'|format(socio.gastado) }}
-                            <span class="etiqueta-monto">
-                                {{ socio.gastos }} gasto{{ '' if socio.gastos == 1 else 's' }}
-                            </span>
-                        </td>
-                        <td class="num">
                             <span class="facturado-historico">
                                 Facturado: {{ '%.2f'|format(socio.total) }}
+                            </span>
+                            {# FASE-CAJA-SOCIO-S4: la plataforma ya se quedó esto
+                               antes de depositar. Va acá arriba, entre el bruto y
+                               el gasto, porque es el orden en que se resta. #}
+                            <span class="resta">
+                                − Comisión de plataforma: {{ '%.2f'|format(socio.comision) }}
+                                {% if socio.sin_comision %}
+                                <span class="etiqueta-monto aviso">
+                                    {{ socio.sin_comision }} pedido{{ '' if socio.sin_comision == 1 else 's' }} sin cargar
+                                </span>
+                                {% endif %}
+                            </span>
+                            <span class="resta">
+                                − Gastado de ahí: {{ '%.2f'|format(socio.gastado) }}
+                                <span class="etiqueta-monto">
+                                    {{ socio.gastos }} gasto{{ '' if socio.gastos == 1 else 's' }}
+                                </span>
                             </span>
                             <span class="saldo-real {{ 'saldo-negativo' if socio.saldo_real < 0 else '' }}">
                                 Tenés realmente: {{ '%.2f'|format(socio.saldo_real) }}
@@ -271,16 +294,29 @@
                                 {% endif %}
                             </td>
                             <td class="num">{{ canal.pedidos }}</td>
-                            <!-- El gasto es de la CUENTA, no del canal: no se
-                                 puede repartir entre los canales que cobran
-                                 ahi sin inventar de cual salio. Por eso la
-                                 celda del desglose queda vacia. -->
-                            <td class="num"></td>
-                            <td class="num">{{ '%.2f'|format(canal.total) }}</td>
+                            <!-- El canal muestra lo suyo: lo que facturo y lo
+                                 que la plataforma le mordio. El gasto NO baja
+                                 hasta aca: es de la CUENTA, y repartirlo entre
+                                 los canales que cobran ahi seria inventar de
+                                 cual salio. Por eso el canal no tiene su
+                                 propio "tenes realmente". -->
+                            <td class="num">
+                                <span class="facturado-historico">
+                                    Facturado: {{ '%.2f'|format(canal.total) }}
+                                </span>
+                                <span class="resta">
+                                    − Comisión: {{ '%.2f'|format(canal.comision) }}
+                                    {% if canal.sin_comision %}
+                                    <span class="etiqueta-monto aviso">
+                                        {{ canal.sin_comision }} sin cargar
+                                    </span>
+                                    {% endif %}
+                                </span>
+                            </td>
                         </tr>
                         {% else %}
                         <tr class="canal">
-                            <td colspan="5"><span class="detalle">Ningún canal cobra en su cuenta.</span></td>
+                            <td colspan="4"><span class="detalle">Ningún canal cobra en su cuenta.</span></td>
                         </tr>
                         {% endfor %}
                     {% endfor %}
@@ -288,10 +324,20 @@
                         <td>Total</td>
                         <td></td>
                         <td class="num">{{ pedidos_totales }}</td>
-                        <td class="num">{{ '%.2f'|format(gastado_total) }}</td>
                         <td class="num">
                             <span class="facturado-historico">
                                 Facturado: {{ '%.2f'|format(total_general) }}
+                            </span>
+                            <span class="resta">
+                                − Comisión de plataforma: {{ '%.2f'|format(comision_total) }}
+                                {% if sin_comision_total %}
+                                <span class="etiqueta-monto aviso">
+                                    {{ sin_comision_total }} pedido{{ '' if sin_comision_total == 1 else 's' }} sin cargar
+                                </span>
+                                {% endif %}
+                            </span>
+                            <span class="resta">
+                                − Gastado de ahí: {{ '%.2f'|format(gastado_total) }}
                             </span>
                             <span class="saldo-real {{ 'saldo-negativo' if saldo_real_total < 0 else '' }}">
                                 Tenés realmente: {{ '%.2f'|format(saldo_real_total) }}
@@ -328,6 +374,19 @@
                 </span>
                 <span class="monto">{{ '%.2f'|format(sin_clasificar_monto) }}</span>
             </div>
+            <!-- FASE-CAJA-SOCIO-S4: mismo bloque y mismo criterio que la linea
+                 de arriba. Un pedido sin comisión cargada no se resta como
+                 cero: se cuenta acá, porque mientras esté el "tenés realmente"
+                 de arriba está por encima de lo que va a terminar siendo. -->
+            <div class="linea">
+                <span class="{{ 'aviso' if sin_comision_total else '' }}">
+                    Pedidos sin la comisión de plataforma cargada
+                    <span class="etiqueta-monto">
+                        {{ sin_comision_total }} pedido{{ '' if sin_comision_total == 1 else 's' }}
+                    </span>
+                </span>
+                <span class="monto">{{ 'sin dato' if sin_comision_total else '—' }}</span>
+            </div>
         </div>
 
         <p class="aclaracion">
@@ -346,12 +405,18 @@
             canal no cambió, se corrigieron esos pedidos y nada más.
             <br><br>
             <strong>Facturado</strong> es el total histórico de ventas por sus canales;
-            <strong>tenés realmente</strong> le resta lo que ya se pagó desde esa misma
-            cuenta, y es la plata que debería quedar si nadie la tocó por fuera del
-            sistema. Los gastos del recuadro de abajo no entran en esa resta: los de
+            <strong>tenés realmente</strong> le resta la comisión que la plataforma ya
+            se quedó y lo que ya se pagó desde esa misma cuenta, y es la plata que
+            debería quedar si nadie la tocó por fuera del sistema. La comisión resta
+            porque nunca llegó a la cuenta: Tiendanube o Mercado Libre se la
+            descontaron antes de depositar. El envío sí sigue sumando dentro del
+            facturado —esa plata entra, y después hay que pagarla como cualquier otro
+            gasto—. Los gastos del recuadro de abajo no entran en esa resta: los de
             capital salieron de otro bolsillo, y los sin clasificar no dicen de cuál
             —mientras haya alguno, el saldo de arriba está incompleto y se ve que lo
-            está.
+            está. Lo mismo con los pedidos sin comisión cargada: no se cuentan como
+            comisión cero, se cuentan como dato que falta, y mientras haya alguno el
+            saldo real es más bajo que el que muestra esta pantalla.
         </p>
     </div>
 </body>
