@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
-"""Cliente HTTP de Mercado Libre (FASE-MELI-S1).
+"""Cliente HTTP de Mercado Libre (FASE-MELI-S1, FASE-MELI-S2).
 
-Solo el OAuth y la verificacion de la credencial. Ni catalogo ni pedidos: eso
-es S2/S3. Ninguna funcion de este modulo toca la base -- hablan con la API y
-devuelven dicts crudos. Quien persiste es la ruta del callback o
-`credencial_mercadolibre.py`.
+S1 trajo el OAuth y la verificacion de la credencial; S2 le agrega el catalogo
+(`listar_items`, `detalle_items`, `traer_catalogo`, al final del archivo). Los
+pedidos y la comision siguen siendo S3. Ninguna funcion de este modulo toca la
+base -- hablan con la API y devuelven dicts crudos. Quien persiste es la ruta
+del callback, `credencial_mercadolibre.py` o `sync_mercadolibre.py`.
 
 La estructura es la de `integracion_mercadopago.py` (OAuth con state y
 redirect_uri en las dos llamadas) y no la de Tiendanube, que no tiene state.
@@ -480,3 +481,204 @@ def apodo_de(usuario, por_defecto='Mercado Libre'):
     if apodo:
         return str(apodo)[:100]
     return por_defecto
+
+
+# ---------------------------------------------------------------------------
+# Catalogo (FASE-MELI-S2)
+# ---------------------------------------------------------------------------
+# Traer el catalogo de Mercado Libre son DOS llamadas y no una, porque la API
+# las parte a proposito:
+#
+#   GET /users/{id}/items/search  -> solo los IDs de las publicaciones
+#   GET /items/bulk?ids=...       -> el detalle real de cada una
+#
+# No hay un endpoint que devuelva el catalogo completo con detalle en una sola
+# pasada. Tiendanube si lo tiene (/products trae el producto entero con sus
+# variants adentro), y esa es la diferencia estructural entre los dos syncs de
+# catalogo: aca el paso 1 lista y el paso 2 detalla.
+#
+# POR QUE /items/bulk Y NO /items?ids=
+#
+# Los dos existen hoy y devuelven lo mismo, pero `/items?ids=` esta anunciado
+# como deprecado con fecha de baja el 25/10/2026. Escribir contra el viejo
+# seria escribir codigo con vencimiento conocido, asi que va directo el nuevo.
+# No son intercambiables campo por campo: el envelope de bulk cambia `code` por
+# `status_code` y mete el recurso adentro de `body`. Se lee con
+# `_cuerpos_de_bulk`, que es el unico lugar del modulo que conoce esa forma.
+
+RUTA_ITEMS_USUARIO = 'users/%s/items/search'
+RUTA_ITEMS_BULK = 'items/bulk'
+
+# Maximo que /users/{id}/items/search acepta por pagina.
+ITEMS_POR_PAGINA = 50
+
+# Techo duro del paginado por offset: la API no deja pasar de offset+limit >
+# 1000 y responde 400. Mas alla de eso hay que usar search_type=scan, que
+# devuelve un scroll_id en vez de offsets. Con el catalogo de Nachi (decenas de
+# publicaciones) nunca se llega, pero si algun dia se llega la funcion lo dice
+# en vez de devolver un catalogo cortado en silencio, que seria peor: un item
+# que no se lista es un producto que desaparece de la base.
+MAX_OFFSET = 1000
+
+# Cuantos ids entran en un /items/bulk. La doc de multiget pone el tope en 20.
+IDS_POR_TANDA = 20
+
+# Corte de seguridad del bucle de paginado, en la misma linea que MAX_PAGINAS
+# de Tiendanube: si la API deja de mover el offset, el bucle termina igual.
+MAX_PAGINAS = 200
+
+
+def _json_de_bulk(resp, ruta):
+    """El body de /items/bulk, que es una LISTA y no un objeto.
+
+    `_leer_json` exige dict porque todo lo demas del modulo devuelve objetos;
+    bulk es la excepcion. Se parsea con el mismo `parse_float=Decimal`: los
+    precios de las publicaciones vienen justamente por aca.
+    """
+    try:
+        datos = json.loads(resp.text, parse_float=Decimal)
+    except (ValueError, TypeError) as exc:
+        raise ErrorMercadoLibre(
+            'Mercado Libre devolvio una respuesta que no se pudo interpretar.',
+            detalle='respuesta no-JSON en %s: %s' % (ruta, _recorte(resp))
+        ) from exc
+    if not isinstance(datos, list):
+        raise ErrorMercadoLibre(
+            'Mercado Libre devolvio el catalogo con un formato inesperado.',
+            detalle='%s no devolvio una lista sino %s' % (ruta, type(datos).__name__)
+        )
+    return datos
+
+
+def _revisar_respuesta(resp, ruta):
+    """401/403 -> reconectar; cualquier otro no-200 -> error comun."""
+    if resp.status_code in (401, 403):
+        raise ErrorMercadoLibre(
+            'El acceso a la cuenta de Mercado Libre vencio o fue revocado. '
+            'Volve a conectar el canal.',
+            detalle='HTTP %s en GET %s: %s' % (resp.status_code, ruta, _recorte(resp)),
+            reconectar=True,
+        )
+    if resp.status_code != 200:
+        raise ErrorMercadoLibre(
+            'Mercado Libre rechazo la consulta del catalogo.',
+            detalle='HTTP %s en GET %s: %s' % (resp.status_code, ruta, _recorte(resp))
+        )
+
+
+def listar_items(user_id, access_token):
+    """Los item_id publicados por la cuenta. Lista de strings, sin detalle.
+
+    Pagina sola, como pide el contrato de IngestorCanal: el que llama recibe la
+    lista entera y no se entera de offsets.
+
+    Devuelve una lista y no un generador a proposito, por el mismo motivo que
+    `integracion_tiendanube.paginar`: si el consumidor abandona a mitad de
+    camino, un generador dejaria el balde de rate limit a medias sin que nadie
+    se entere.
+
+    Se trae TODO el catalogo, sin filtrar por status: una publicacion pausada o
+    cerrada sigue siendo un producto que existe y que pudo haberse vendido. El
+    que decide si esta activo es el ingestor, mirando `status`, no esta funcion
+    escondiendo filas.
+    """
+    ruta = RUTA_ITEMS_USUARIO % user_id
+    ids = []
+    offset = 0
+
+    for _ in range(MAX_PAGINAS):
+        if offset + ITEMS_POR_PAGINA > MAX_OFFSET:
+            raise ErrorMercadoLibre(
+                'El catalogo de Mercado Libre es mas grande de lo que esta '
+                'sincronizacion sabe recorrer.',
+                detalle='%s supero el offset maximo de %d; hace falta '
+                        'search_type=scan' % (ruta, MAX_OFFSET)
+            )
+
+        resp = _get_api(ruta, access_token,
+                        params={'offset': offset, 'limit': ITEMS_POR_PAGINA})
+        _revisar_respuesta(resp, ruta)
+        datos = _leer_json(resp, 'GET %s' % ruta)
+
+        lote = datos.get('results')
+        if not isinstance(lote, list):
+            raise ErrorMercadoLibre(
+                'Mercado Libre devolvio el listado del catalogo con un formato '
+                'inesperado.',
+                detalle='%s: `results` no es una lista sino %s'
+                        % (ruta, type(lote).__name__)
+            )
+
+        ids.extend(str(item_id) for item_id in lote if item_id)
+
+        # Se corta por lote corto y no por `paging.total`: total es un numero
+        # informativo que la API redondea, y confiar en el puede pedir una
+        # pagina de mas (barato) o cortar de menos (perder items).
+        if len(lote) < ITEMS_POR_PAGINA:
+            return ids
+        offset += ITEMS_POR_PAGINA
+
+    raise ErrorMercadoLibre(
+        'La consulta del catalogo de Mercado Libre no termina nunca.',
+        detalle='GET %s supero las %d paginas' % (ruta, MAX_PAGINAS)
+    )
+
+
+def _cuerpos_de_bulk(datos):
+    """El envelope de /items/bulk -> la lista de items reales.
+
+    La respuesta es una lista de sobres, uno por id pedido:
+
+        [{"code": 200, "body": {...}}, ...]        <- /items?ids=  (deprecado)
+        [{"status_code": 200, "body": {...}}, ...] <- /items/bulk
+
+    Se leen las dos claves porque cuestan lo mismo y porque un payload guardado
+    de antes del cambio tiene que seguir siendo legible; la que manda es
+    `status_code`, que es la del endpoint que se usa.
+
+    Un sobre que no vino 200 se SALTEA en silencio, no voltea la tanda: es un
+    item que se borro entre el /search y el /bulk, o uno al que la cuenta ya no
+    tiene acceso. Perder el catalogo entero por una publicacion fantasma seria
+    peor que sincronizar una de menos.
+    """
+    cuerpos = []
+    for sobre in datos:
+        if not isinstance(sobre, dict):
+            continue
+        estado = sobre.get('status_code', sobre.get('code'))
+        if estado is not None and _entero(estado) != 200:
+            continue
+        cuerpo = sobre.get('body')
+        if isinstance(cuerpo, dict):
+            cuerpos.append(cuerpo)
+    return cuerpos
+
+
+def detalle_items(ids, access_token):
+    """El detalle de cada item_id, en tandas de IDS_POR_TANDA.
+
+    Devuelve la lista de items crudos (el `body` de cada sobre, ya desenvuelto)
+    en el orden en que llegaron. Los ids que Mercado Libre no pudo devolver no
+    aparecen; ver `_cuerpos_de_bulk`.
+    """
+    items = []
+    ids = [str(x) for x in (ids or []) if x]
+
+    for arranque in range(0, len(ids), IDS_POR_TANDA):
+        tanda = ids[arranque:arranque + IDS_POR_TANDA]
+        resp = _get_api(RUTA_ITEMS_BULK, access_token, params={'ids': ','.join(tanda)})
+        _revisar_respuesta(resp, RUTA_ITEMS_BULK)
+        items.extend(_cuerpos_de_bulk(_json_de_bulk(resp, RUTA_ITEMS_BULK)))
+
+    return items
+
+
+def traer_catalogo(user_id, access_token):
+    """El catalogo completo con detalle: /items/search + /items/bulk.
+
+    Es lo que consume el ingestor. Existe para que el ingestor no tenga que
+    saber que son dos llamadas -- el contrato de IngestorCanal dice que
+    `traer_productos()` devuelve el catalogo crudo y paginado, sin cursores a
+    la vista.
+    """
+    return detalle_items(listar_items(user_id, access_token), access_token)

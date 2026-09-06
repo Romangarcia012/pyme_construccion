@@ -324,8 +324,16 @@
                                         {{ (canal.sync.fin or canal.sync.inicio).strftime('%d/%m/%Y %H:%M') }} UTC ·
                                         {{ canal.sync.productos.leidos }} producto(s)
                                         ({{ canal.sync.productos.nuevos }} nuevo/s) ·
-                                        {{ canal.sync.pedidos.leidos }} pedido(s)
-                                        ({{ canal.sync.pedidos.nuevos }} nuevo/s) ·
+                                        {# FASE-MELI-S2: los canales que todavia no traen pedidos
+                                           no muestran "0 pedido(s)". Un cero ahi se lee como un
+                                           resultado -no vino ninguno- cuando en realidad esta
+                                           sincronizacion ni siquiera los pide. #}
+                                        {% if canal.solo_catalogo %}
+                                            solo catálogo ·
+                                        {% else %}
+                                            {{ canal.sync.pedidos.leidos }} pedido(s)
+                                            ({{ canal.sync.pedidos.nuevos }} nuevo/s) ·
+                                        {% endif %}
                                         {# FASE-AUDITORIA-S3: sin nombre no es un dato faltante,
                                            es el cron. Por eso "automático" y no un guion. #}
                                         {% if canal.sync.disparada_por %}{{ canal.sync.disparada_por }} — manual{% else %}automático{% endif %}
@@ -357,7 +365,7 @@
                                             <button type="submit" class="btn-sync"
                                                     {% if canal.sync_corriendo %}disabled
                                                     title="Ya hay una sincronización en curso"{% endif %}>
-                                                {% if canal.sync_corriendo %}Sincronizando…{% else %}Sincronizar ahora{% endif %}
+                                                {% if canal.sync_corriendo %}Sincronizando…{% else %}{{ canal.etiqueta_sincronizar }}{% endif %}
                                             </button>
                                         </form>
                                     {% endif %}

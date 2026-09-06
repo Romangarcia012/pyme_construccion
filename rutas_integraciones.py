@@ -7,6 +7,8 @@ FASE-MELI-S1: conectar el canal de Mercado Libre (OAuth con state, token que
                vence a las 6 horas y refresh_token de un solo uso).
 FASE-SYNC-CRON-S2: disparar ese mismo backfill desde un cron externo, con
                un token en header en vez de sesion.
+FASE-MELI-S2: traer el catalogo de Mercado Libre (productos y variaciones) con
+               un boton manual. Sin cron todavia: eso es S4.
 
 Los canales y las cuentas comparten pagina porque son la misma pregunta vista
 de los dos lados -- por donde entro la venta y adonde entro la plata -- pero
@@ -39,6 +41,7 @@ import ingestor_mercadopago as ingestor_mp
 import integracion_mercadolibre as meli
 import integracion_mercadopago as mp
 import integracion_tiendanube as tn
+import sync_mercadolibre
 import sync_mercadopago
 import sync_tiendanube
 from models import (
@@ -60,12 +63,15 @@ CANALES_CONOCIDOS = [
     {'tipo': TIPO_TIENDANUBE, 'nombre': 'Tiendanube',
      'endpoint_conectar': 'integraciones.conectar_tiendanube',
      'endpoint_sincronizar': 'integraciones.sincronizar_tiendanube'},
-    # FASE-MELI-S1: ya tiene flujo de conexion. `endpoint_sincronizar` sigue en
-    # None a proposito: traer catalogo y pedidos es S2/S3, y hasta entonces un
-    # boton "Sincronizar" seria una promesa que no cumple nadie.
+    # FASE-MELI-S2: el boton ya trae algo -- el catalogo. Los pedidos son S3,
+    # asi que el sync de este canal deja `pedidos` en cero y la etiqueta del
+    # boton lo dice ("Sincronizar catálogo", no "Sincronizar ahora"): prometer
+    # una sincronizacion a secas seria prometer pedidos que no vienen.
     {'tipo': TIPO_MERCADOLIBRE, 'nombre': 'Mercado Libre',
      'endpoint_conectar': 'integraciones.conectar_mercadolibre',
-     'endpoint_sincronizar': None},
+     'endpoint_sincronizar': 'integraciones.sincronizar_mercadolibre',
+     'etiqueta_sincronizar': 'Sincronizar catálogo',
+     'solo_catalogo': True},
 ]
 
 
@@ -96,6 +102,21 @@ def _canal(tipo, crear=False):
     return canal
 
 
+# Que modulo de sync le corresponde a cada canal. Los dos exponen la misma
+# forma -- sync_en_curso(canal_id) y ultimo_sync(canal_id) -- justamente para
+# que la pagina no tenga que saber cual esta usando.
+SYNC_POR_CANAL = {
+    TIPO_TIENDANUBE: sync_tiendanube,
+    TIPO_MERCADOLIBRE: sync_mercadolibre,
+}
+
+
+def _sync_de(tipo):
+    """El modulo de sync del canal. Tiendanube como default: es el unico que
+    existia antes de que hubiera mas de uno."""
+    return SYNC_POR_CANAL.get(tipo, sync_tiendanube)
+
+
 @integraciones_bp.route('')
 @login_required
 def listar():
@@ -115,8 +136,9 @@ def listar():
         sync = None
         corriendo = False
         if fila is not None and fila.activo and conocido['endpoint_sincronizar']:
-            corriendo = sync_tiendanube.sync_en_curso(fila.id) is not None
-            sync = sync_tiendanube.ultimo_sync(fila.id)
+            modulo = _sync_de(conocido['tipo'])
+            corriendo = modulo.sync_en_curso(fila.id) is not None
+            sync = modulo.ultimo_sync(fila.id)
 
         # FASE-MELI-S1: para Mercado Libre "activo" no alcanza como estado. El
         # access_token vence cada seis horas, asi que un canal marcado activo
@@ -137,6 +159,15 @@ def listar():
             'ultima_sync': fila.fecha_ultima_sync if fila else None,
             'endpoint_conectar': conocido['endpoint_conectar'],
             'endpoint_sincronizar': conocido['endpoint_sincronizar'],
+            # FASE-MELI-S2: cada canal pone su propia etiqueta cuando el boton
+            # no hace lo mismo que el de los demas. Default explicito para que
+            # la plantilla no tenga que conocer los tipos de canal.
+            'etiqueta_sincronizar': conocido.get('etiqueta_sincronizar',
+                                                 'Sincronizar ahora'),
+            # True cuando la sincronizacion de ese canal todavia no trae
+            # pedidos: la columna de estado no puede mostrar "0 pedido(s)" como
+            # si fuera un resultado.
+            'solo_catalogo': conocido.get('solo_catalogo', False),
             'sync': sync,
             'sync_corriendo': corriendo,
         })
@@ -798,4 +829,51 @@ def callback_mercadolibre():
         return redirect(url_for('integraciones.listar'))
 
     flash('Mercado Libre conectado: %s.' % apodo, 'success')
+    return redirect(url_for('integraciones.listar'))
+
+
+@integraciones_bp.route('/mercadolibre/sincronizar', methods=['POST'])
+@login_required
+def sincronizar_mercadolibre():
+    """Dispara el backfill del CATALOGO de Mercado Libre (FASE-MELI-S2).
+
+    Trae productos y variaciones. NO trae pedidos ni comision: eso es S3. El
+    mensaje que ve el usuario y la etiqueta del boton lo dicen, para que un
+    catalogo sincronizado no se lea como "ya esta todo".
+
+    Responde de inmediato: el trabajo real corre en un thread daemon con su
+    propio app_context (ver sync_mercadolibre.py). Nunca se le pega a la API de
+    Mercado Libre dentro del ciclo request/response -- el catalogo son dos
+    llamadas por tanda de 20 items y dejaria al worker de gunicorn colgado.
+
+    Es POST y no GET a proposito, y aca pesa mas que en Tiendanube: la corrida
+    refresca el token, y el refresh_token de Mercado Libre es de un solo uso.
+    Un prefetch del navegador sobre un GET quemaria una credencial.
+
+    Sin restriccion de rol, igual que el de Tiendanube: la operacion no
+    destruye nada (es un upsert idempotente) y el canal ya lo conecto un admin.
+    """
+    canal = _canal(TIPO_MERCADOLIBRE)
+    if canal is None or not canal.activo:
+        flash('Primero conectá la cuenta de Mercado Libre.', 'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    # El thread sobrevive al request, asi que no puede quedarse con el proxy de
+    # current_app: necesita el objeto Flask real para abrir su propio contexto.
+    app_obj = current_app._get_current_object()
+
+    try:
+        # Quien apreto el boton queda anotado en sync_log (FASE-AUDITORIA-S3).
+        # Aca siempre hay alguien: el boton es el unico disparo que existe
+        # hasta que S4 enganche el cron.
+        arranco, mensaje = sync_mercadolibre.lanzar_sync_catalogo(
+            app_obj, canal.id, usuario_id=current_user.id)
+    except Exception as exc:
+        db.session.rollback()
+        _log('no se pudo lanzar el sync de catalogo de Mercado Libre: %r' % (exc,))
+        flash('No se pudo iniciar la sincronización del catálogo. Probá de nuevo.',
+              'danger')
+        return redirect(url_for('integraciones.listar'))
+
+    flash(mensaje, 'success' if arranco else 'danger')
     return redirect(url_for('integraciones.listar'))
