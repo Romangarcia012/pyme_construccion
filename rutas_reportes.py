@@ -62,7 +62,7 @@ from decimal import ROUND_HALF_UP, Decimal
 
 from flask import Blueprint, render_template, url_for
 from flask_login import current_user, login_required
-from sqlalchemy import func
+from sqlalchemy import func, true
 from sqlalchemy.orm import joinedload
 
 from models import (
@@ -72,6 +72,7 @@ from models import (
     CanalVenta,
     CuentaCobro,
     Gasto,
+    Ingreso,
     Pedido,
     db,
 )
@@ -963,3 +964,137 @@ def caja_socio():
                            capital_cantidad=capital_cantidad,
                            sin_clasificar_monto=sin_clasificar_monto,
                            sin_clasificar_cantidad=sin_clasificar_cantidad)
+
+
+# ==========================================================================
+# FASE-RESUMEN-GENERAL-S1 -- todo junto, un solo numero
+#
+# Las dos pantallas de arriba estan separadas a proposito y ninguna de las dos
+# se toca aca. /caja-general es el libro de movimientos cargados a mano -- el
+# Excel de Roman -- y no mira un solo pedido. /reportes/caja-socio es al reves:
+# mira los pedidos y no mira los ingresos cargados. Cada una contesta bien su
+# pregunta y las dos juntas no contestan la que falta: "cuanta plata tengo en
+# total, sumando todo".
+#
+# Esta pantalla la contesta LEYENDO las dos, sin mover ni duplicar una fila.
+#
+#     posicion_real = (aporte de capital
+#                      + facturado neto de ventas
+#                      - comision de plataforma)
+#                     - gastos totales
+#
+# POR QUE NO SE DUPLICA NADA
+#
+# Porque las ventas NO estan en Ingreso. Estuvieron: hasta
+# FASE-AUDITORIA-EXCEL-S3 se cargaban a mano ahi, y sumar los pedidos ademas
+# de eso habria contado la misma plata dos veces. Desde entonces Ingreso tiene
+# solo el aporte de los socios, y la venta vive unicamente en Pedido -- que es
+# lo que hace que esta suma sea legitima. Si algun dia vuelve a cargarse una
+# venta como Ingreso, este numero se infla y no hay nada aca que lo delate:
+# `test_no_duplica_nada` es el que se para en esa puerta.
+#
+# LA OTRA MITAD DE LO MISMO: el facturado sale de `_facturado_por_canal`, la
+# MISMA funcion que usa caja-socio, no de una consulta nueva escrita igual.
+# Dos consultas gemelas es la forma de que un dia dejen de serlo y las dos
+# pantallas digan numeros distintos sin que nada avise.
+#
+# EL GASTO VA ENTERO, SIN FILTRAR POR ORIGEN
+#
+# Es la unica diferencia de criterio con caja-socio, y es a proposito. Alla el
+# origen decide a QUIEN se le resta, y por eso los de capital y los sin
+# clasificar quedan afuera de la cuenta de cada socio -- restarselos a uno
+# seria adivinar de que bolsillo salieron. Aca no hay a quien adivinarle: la
+# pregunta es cuanto salio en total, y de que pozo salio no cambia la
+# respuesta. Un gasto sin origen cargado entra igual, porque la plata se fue
+# lo mismo.
+#
+# LO QUE ESTA PANTALLA NO ES
+#
+# No es plata conciliada. Nadie miro un extracto: es lo que deberia haber si
+# todo lo cargado es cierto y nada se movio por fuera del sistema.
+# ==========================================================================
+
+
+def _total_ingresos(empresa_id):
+    """(suma, cantidad) de TODO lo cargado como Ingreso.
+
+    Hoy eso es el aporte de capital de los socios y nada mas: las ventas
+    salieron de esta tabla en FASE-AUDITORIA-EXCEL-S3 y viven en Pedido. Por
+    eso no hace falta filtrar por categoria -- y filtrarla seria peor, porque
+    ataria el numero al nombre exacto de una categoria que alguien puede
+    renombrar desde la pantalla de Categorias.
+
+    Que no se filtre significa que si mañana se carga un ingreso que NO es
+    aporte, entra aca. Es correcto para "cuanta plata entro"; deja de serlo si
+    ese ingreso es una venta que ya esta como pedido, que es exactamente el
+    caso que `test_no_duplica_nada` vigila.
+    """
+    monto, cantidad = (db.session.query(func.coalesce(func.sum(Ingreso.monto), 0),
+                                        func.count(Ingreso.id))
+                       .filter(Ingreso.empresa_id == empresa_id)
+                       .one())
+    return Decimal(monto or 0), int(cantidad or 0)
+
+
+@reportes_bp.route('/resumen-general')
+@login_required
+def resumen_general():
+    """La posicion real de la empresa: los dos reportes sumados en un numero.
+
+    Un solo bloque con las cuatro lineas de la cuenta, en el orden en que se
+    hace, y el resultado abajo. El desglose se muestra entero y no solo el
+    total: un numero suelto que dice "tenes $X" no se puede verificar contra
+    nada, y la primera vez que no coincida con lo que Roman tiene en la mano
+    no va a haber por donde empezar a mirar.
+
+    NO TOCA NINGUNA DE LAS DOS PANTALLAS QUE SUMA. Solo lee. Cada una sigue
+    mostrando exactamente lo que mostraba, y desde aca se linkean las dos:
+    esta pantalla da el total, el detalle por socio o por movimiento sigue
+    estando donde estaba.
+
+    LOS PEDIDOS SIN COMISION CARGADA SE MARCAN, NO SE ASUMEN EN CERO
+
+    Mismo criterio NULL != 0 de todo el modulo. `sum()` ignora los NULL, asi
+    que la comision que se resta ya sale bien; lo que se perderia sin el
+    contador es saber en que direccion esta mal el resultado. Mientras haya
+    pedidos sin comision, la posicion real que dice esta pantalla esta por
+    ARRIBA de la que va a terminar siendo, y decirlo es la diferencia entre un
+    numero incompleto y un numero mentiroso.
+
+    LOS REGALOS NO ENTRAN, y por eso se cuentan aparte: vienen ya excluidos de
+    `_facturado_por_canal`, que es el mismo lugar donde los excluye caja-socio.
+    """
+    empresa_id = current_user.empresa_id
+
+    # Las ventas salen de la MISMA funcion que caja-socio. No es una consulta
+    # nueva que da lo mismo: es la misma, y por eso los dos numeros no se
+    # pueden separar sin que alguien lo haga a proposito.
+    facturado = _facturado_por_canal(empresa_id)
+    ventas_monto = sum((fila[0] for fila in facturado.values()), CERO)
+    ventas_pedidos = sum(fila[1] for fila in facturado.values())
+    comision_monto = sum((fila[2] for fila in facturado.values()), CERO)
+    sin_comision = sum(fila[3] for fila in facturado.values())
+
+    regalos = sum(_regalos_por_canal(empresa_id).values())
+
+    capital_monto, capital_cantidad = _total_ingresos(empresa_id)
+
+    # TODOS los gastos, sin mirar origen_fondo. `true()` y no un filtro
+    # omitido para no abrirle a `_total_gastos` una segunda forma de llamarse.
+    gastos_monto, gastos_cantidad = _total_gastos(empresa_id, true())
+
+    entra = capital_monto + ventas_monto - comision_monto
+    posicion_real = entra - gastos_monto
+
+    return render_template('reportes_resumen_general.html',
+                           capital_monto=capital_monto,
+                           capital_cantidad=capital_cantidad,
+                           ventas_monto=ventas_monto,
+                           ventas_pedidos=ventas_pedidos,
+                           comision_monto=comision_monto,
+                           sin_comision=sin_comision,
+                           regalos=regalos,
+                           gastos_monto=gastos_monto,
+                           gastos_cantidad=gastos_cantidad,
+                           entra=entra,
+                           posicion_real=posicion_real)

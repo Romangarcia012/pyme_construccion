@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Posición real</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container { max-width: 720px; margin: 0 auto; }
+
+        .header { margin-bottom: 25px; }
+        h1 { color: #fff; font-size: 28px; }
+        .subtitulo { color: #888; font-size: 14px; margin-top: 6px; }
+
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn-volver:hover { background: #555; }
+
+        .cuenta {
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 22px 24px;
+        }
+
+        /* Cada termino de la cuenta es una fila: el signo adelante, el
+           concepto, y el monto a la derecha. Se lee de arriba a abajo en el
+           mismo orden en que se hace la suma. */
+        .linea {
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 20px;
+            padding: 11px 0;
+            border-bottom: 1px solid #2a2a2a;
+            font-size: 15px;
+        }
+        .linea:last-child { border-bottom: none; }
+
+        .signo {
+            display: inline-block;
+            width: 16px;
+            color: #888;
+            font-variant-numeric: tabular-nums;
+        }
+
+        .monto {
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+            color: #e0e0e0;
+        }
+
+        .suma { color: #7fbf7f; }
+        .resta { color: #d69090; }
+
+        /* El subtotal de lo que entro, antes de restar los gastos. No es un
+           termino nuevo de la cuenta: es la mitad de arriba cerrada, para que
+           la resta final se vea contra un solo numero y no contra tres. */
+        .subtotal {
+            border-top: 1px solid #333;
+            color: #bbb;
+        }
+
+        /* El resultado. Se separa a proposito de las lineas de arriba: es lo
+           unico de esta pantalla que alguien va a mirar de un vistazo. */
+        .resultado {
+            margin-top: 18px;
+            padding-top: 18px;
+            border-top: 2px solid #444;
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+            gap: 20px;
+        }
+        .resultado .titulo { color: #fff; font-size: 18px; font-weight: 600; }
+        .resultado .monto { color: #fff; font-size: 26px; font-weight: 600; }
+
+        /* Que la plata alcance para menos que cero se paga de algun lado: o
+           falta cargar un ingreso, o se gasto de mas. En los dos casos hay
+           que mirarlo, no leerlo de pasada. */
+        .negativo { color: #e06c6c !important; }
+
+        .etiqueta-monto {
+            color: #888;
+            font-size: 11px;
+            font-weight: 400;
+            text-transform: uppercase;
+            letter-spacing: 0.03em;
+        }
+
+        /* Lo que le falta a la cuenta para estar completa. Amarillo, mismo
+           criterio que el resto de los reportes: no esta roto, le falta que
+           alguien cargue un dato. */
+        .aviso { color: #d6a441; }
+
+        .faltantes {
+            margin-top: 25px;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 18px 20px;
+        }
+        .faltantes h2 { color: #fff; font-size: 15px; margin-bottom: 12px; }
+
+        .detalle {
+            margin-top: 25px;
+            background: #1a1a1a;
+            border: 1px solid #2a2a2a;
+            border-radius: 8px;
+            padding: 18px 20px;
+        }
+        .detalle h2 { color: #fff; font-size: 15px; margin-bottom: 12px; }
+        .detalle p {
+            color: #999;
+            font-size: 13px;
+            line-height: 1.6;
+            margin-bottom: 10px;
+        }
+        .detalle p:last-child { margin-bottom: 0; }
+        .detalle a { color: #7aa7d6; }
+
+        .aclaracion {
+            color: #777;
+            font-size: 13px;
+            margin-top: 20px;
+            line-height: 1.6;
+        }
+        .aclaracion a { color: #7aa7d6; }
+
+        @media (max-width: 768px) {
+            .linea { font-size: 14px; }
+            .resultado .monto { font-size: 22px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('dashboard') }}" class="btn-volver">← Volver al Dashboard</a>
+
+        <div class="header">
+            <h1>Posición real</h1>
+            <p class="subtitulo">
+                Cuánta plata hay en total, sumando el aporte de los socios y lo
+                que dejaron las ventas, y restando todo lo que se gastó.
+            </p>
+        </div>
+
+        <div class="cuenta">
+            <div class="linea">
+                <span>
+                    <span class="signo suma">+</span>
+                    Aporte de capital
+                    <span class="etiqueta-monto">
+                        {{ capital_cantidad }} ingreso{{ '' if capital_cantidad == 1 else 's' }}
+                    </span>
+                </span>
+                <span class="monto">{{ '%.2f'|format(capital_monto) }}</span>
+            </div>
+
+            <div class="linea">
+                <span>
+                    <span class="signo suma">+</span>
+                    Facturado de ventas <span class="etiqueta-monto">sin envío</span>
+                    <span class="etiqueta-monto">
+                        {{ ventas_pedidos }} pedido{{ '' if ventas_pedidos == 1 else 's' }}
+                    </span>
+                </span>
+                <span class="monto">{{ '%.2f'|format(ventas_monto) }}</span>
+            </div>
+
+            {# La comisión va en su propia línea y no restada del facturado de
+               arriba: si el facturado ya viniera neto, la única forma de saber
+               cuánto se quedó la plataforma sería mirar el otro reporte. #}
+            <div class="linea">
+                <span>
+                    <span class="signo resta">−</span>
+                    Comisión de plataforma
+                    {% if sin_comision %}
+                    <span class="etiqueta-monto aviso">
+                        {{ sin_comision }} pedido{{ '' if sin_comision == 1 else 's' }} sin cargar
+                    </span>
+                    {% endif %}
+                </span>
+                <span class="monto">{{ '%.2f'|format(comision_monto) }}</span>
+            </div>
+
+            <div class="linea subtotal">
+                <span><span class="signo"></span> Entró en total</span>
+                <span class="monto">{{ '%.2f'|format(entra) }}</span>
+            </div>
+
+            <div class="linea">
+                <span>
+                    <span class="signo resta">−</span>
+                    Gastos totales <span class="etiqueta-monto">de cualquier origen</span>
+                    <span class="etiqueta-monto">
+                        {{ gastos_cantidad }} gasto{{ '' if gastos_cantidad == 1 else 's' }}
+                    </span>
+                </span>
+                <span class="monto">{{ '%.2f'|format(gastos_monto) }}</span>
+            </div>
+
+            <div class="resultado">
+                <span class="titulo">Posición real</span>
+                <span class="monto {{ 'negativo' if posicion_real < 0 else '' }}">
+                    {{ '%.2f'|format(posicion_real) }}
+                </span>
+            </div>
+        </div>
+
+        {# Un pedido sin comisión cargada no se resta como cero. Mientras haya
+           alguno, el número de arriba está por ENCIMA del que va a terminar
+           siendo, y eso se dice acá en vez de dejar que se descubra cuando la
+           plata no alcance. #}
+        {% if sin_comision or regalos %}
+        <div class="faltantes">
+            <h2>Lo que esta cuenta todavía no sabe</h2>
+            {% if sin_comision %}
+            <div class="linea">
+                <span class="aviso">
+                    Pedidos sin la comisión de plataforma cargada
+                    <span class="etiqueta-monto">
+                        {{ sin_comision }} pedido{{ '' if sin_comision == 1 else 's' }}
+                    </span>
+                </span>
+                <span class="monto aviso">la posición real es más baja</span>
+            </div>
+            {% endif %}
+            {% if regalos %}
+            <div class="linea">
+                <span>
+                    Regalos (sorteos, canjes, muestras sin cargo)
+                    <span class="etiqueta-monto">
+                        {{ regalos }} pedido{{ '' if regalos == 1 else 's' }}
+                    </span>
+                </span>
+                <span class="monto">no suman</span>
+            </div>
+            {% endif %}
+        </div>
+        {% endif %}
+
+        <div class="detalle">
+            <h2>Si querés el detalle</h2>
+            <p>
+                Este número no reemplaza a ninguno de los dos reportes: los suma.
+                Cada uno sigue mostrando exactamente lo que mostraba.
+            </p>
+            <p>
+                <a href="{{ url_for('reportes.caja_socio') }}">Caja por socio</a> —
+                de quién es cada peso de esas ventas, canal por canal, y cuánto ya
+                gastó cada uno desde su propia cuenta.
+            </p>
+            <p>
+                <a href="{{ url_for('caja_general') }}">Caja General</a> — el libro
+                de movimientos, uno por uno y con saldo corriente. Ahí está cada
+                gasto que acá entra sumado en una sola línea.
+            </p>
+        </div>
+
+        <p class="aclaracion">
+            Esto es lo que <strong>debería</strong> haber, no lo que hay conciliado:
+            sale de lo que está cargado en el sistema, no de mirar un extracto. Si no
+            coincide con la plata real, la diferencia es algo que se movió por fuera
+            o que todavía no se cargó.
+            <br><br>
+            El <strong>facturado</strong> es el total de cada venta menos el envío: el
+            envío se le cobra al cliente y se le paga al correo, así que no queda. La
+            <strong>comisión</strong> resta porque la plataforma ya se la quedó antes
+            de depositar —nunca llegó a la cuenta—. Los <strong>gastos</strong> entran
+            todos, sin importar de qué plata salieron: acá la pregunta es cuánto salió
+            en total, y eso no cambia según el bolsillo. Las ventas no se cuentan dos
+            veces: desde que dejaron de cargarse a mano como ingreso, viven solo como
+            pedidos, y el aporte de capital es lo único que queda del otro lado.
+        </p>
+    </div>
+</body>
+</html>
