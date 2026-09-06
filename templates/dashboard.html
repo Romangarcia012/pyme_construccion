@@ -716,10 +716,16 @@
         
         <!-- CARDS PRINCIPALES - FILA 1 -->
         <div class="cards-grid">
+            {# FASE-EVA-S4: este número son las VENTAS, no la tabla Ingreso.
+               Decía "Ingresos Totales / Dinero recibido" cuando salía de
+               sumar Ingreso, que desde FASE-AUDITORIA-EXCEL-S3 tiene sólo el
+               aporte de capital. El gráfico "Ingresos cargados por categoría"
+               de más abajo sí sigue siendo esa tabla: los dos números son
+               distintos a propósito y cada uno dice cuál es. #}
             <div class="card excelente">
-                <h3>Ingresos Totales</h3>
+                <h3>Ingresos por Ventas</h3>
                 <div class="value">${{ "%.0f"|format(analisis.ingresos) }}</div>
-                <div class="status">Dinero recibido</div>
+                <div class="status">Facturado neto, sin envío ni comisión</div>
             </div>
     
             <div class="card malo">
@@ -789,7 +795,10 @@
             </div>
             
             <div class="seccion">
-                <h2>Ingresos por Categoría</h2>
+                {# La tabla Ingreso, que hoy es el aporte de capital de los
+                   socios. No es lo mismo que la tarjeta "Ingresos por Ventas"
+                   de arriba, y por eso no se llaman igual. #}
+                <h2>Ingresos Cargados por Categoría</h2>
                 <div class="grafico-container">
                     <canvas id="chartIngresos"></canvas>
                 </div>

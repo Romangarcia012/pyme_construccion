@@ -40,7 +40,7 @@ productiva no se toca.
 import os
 import sys
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -50,10 +50,12 @@ import eva_utils  # noqa: E402
 from tests.ayuda_auth import request_anonimo  # noqa: E402
 from app import app  # noqa: E402
 from models import (  # noqa: E402
+    CanalVenta,
     Categoria,
     Empresa,
     Gasto,
     Ingreso,
+    Pedido,
     Usuario,
     db,
 )
@@ -166,6 +168,31 @@ class BaseEva(unittest.TestCase):
     def texto_de(self, usuario_id, ruta):
         return self.get(usuario_id, ruta).get_data(as_text=True)
 
+    def analisis_del_dashboard(self, usuario_id):
+        """El dict que /dashboard le pasa a la plantilla (FASE-EVA-S4).
+
+        Hace falta cuando lo que se afirma es de DONDE sale un numero y no
+        solo que aparezca. El aporte de capital sigue estando en la pantalla
+        con todo derecho -- en el grafico de ingresos cargados y en los
+        ultimos movimientos --, asi que buscarlo en el texto crudo no
+        distingue "se cuenta como ingreso del EVA" de "se muestra donde
+        corresponde".
+        """
+        from flask import template_rendered
+
+        capturado = {}
+
+        def anotar(remitente, template, context, **extra):
+            capturado.setdefault('ctx', context)
+
+        template_rendered.connect(anotar, app)
+        try:
+            self.get(usuario_id, '/dashboard')
+        finally:
+            template_rendered.disconnect(anotar, app)
+
+        return capturado.get('ctx', {}).get('analisis', {})
+
     def cargar_movimientos(self, ingreso, gasto):
         """Dos movimientos fechados hace EXACTAMENTE un anio.
 
@@ -188,6 +215,37 @@ class BaseEva(unittest.TestCase):
                              empresa_id=self.empresa_id,
                              usuario_id=self.roman_id,
                              categoria_id=self.cat_gasto_id))
+        db.session.commit()
+
+    def cargar_venta(self, monto, envio='0.00', comision='0.00'):
+        """Una venta real, en Pedido (FASE-EVA-S4).
+
+        Desde esa slice los ingresos del dashboard salen de las VENTAS y no de
+        la tabla Ingreso, que hoy tiene solo el aporte de capital. Un test que
+        quiere ver un numero de ingresos en la pantalla tiene que cargar una
+        venta; cargar un Ingreso mide otra cosa.
+
+        La fecha es la misma que la de `cargar_movimientos` -- hace un anio
+        exacto -- pero no cambia nada aca: el periodo lo siguen armando gasto e
+        ingreso, y los pedidos no entran en ese MIN (ver el comentario de
+        eva_utils sobre lo que S4 dejo abierto).
+        """
+        canal = CanalVenta.query.filter_by(empresa_id=self.empresa_id).first()
+        if canal is None:
+            canal = CanalVenta(empresa_id=self.empresa_id, tipo='manual',
+                               nombre='Venta manual', activo=True)
+            db.session.add(canal)
+            db.session.commit()
+
+        hace_un_anio = date.today() - timedelta(days=365)
+        db.session.add(Pedido(empresa_id=self.empresa_id, canal_id=canal.id,
+                              fecha_pedido=datetime(hace_un_anio.year,
+                                                    hace_un_anio.month,
+                                                    hace_un_anio.day, 12, 0),
+                              estado='open', comprador_nombre='Camila',
+                              total=Decimal(monto),
+                              total_envio=Decimal(envio),
+                              comision_plataforma=Decimal(comision)))
         db.session.commit()
 
     def poner_capital(self, monto):
@@ -303,14 +361,43 @@ class TestDashboardConDatos(BaseEva):
     """El caso que ya andaba y que no se puede romper de paso."""
 
     def test_dashboard_con_datos_reales_si_calcula(self):
-        self.cargar_movimientos(ingreso='150000.00', gasto='120000.00')
+        """Los mismos numeros de siempre, con los ingresos de donde van.
+
+        Hasta FASE-EVA-S4 los 150000 de ingresos entraban por
+        `cargar_movimientos`, o sea como una fila de Ingreso. Eso dejo de ser
+        cierto A PROPOSITO: los ingresos del dashboard son ahora las ventas
+        (Pedido), y la tabla Ingreso quedo con el aporte de capital, que no es
+        lo que factura la empresa.
+
+        La cuenta congelada NO cambia -- 150000 contra 120000, margen 20%, ROI
+        7%, EVA -9000 -- porque lo que se corrigio es de donde sale el
+        ingreso, no como se calcula con el. Lo que se agrega es el aporte de
+        999999: un numero que TIENE que estar cargado y NO puede aparecer en
+        pantalla. Sin el, este test pasaria igual con el bug puesto de vuelta.
+        """
+        self.cargar_movimientos(ingreso='999999.00', gasto='120000.00')
+        self.cargar_venta('150000.00')
         self.poner_capital(300000.0)
 
         texto = self.texto_de(self.roman_id, '/dashboard')
 
         # Los numeros de la formula, tal cual los formatea la plantilla.
-        self.assertIn('$150000', texto)        # ingresos
+        self.assertIn('$150000', texto)        # ingresos: la VENTA
         self.assertIn('$120000', texto)        # gastos
+
+        # Y el aporte de capital NO se cuenta como ingreso. Es la afirmacion
+        # que trajo la slice: con el bug viejo el numero de arriba era 999999.
+        #
+        # Se mira el dict y no el texto a proposito: los 999999 SIGUEN en la
+        # pantalla, en el grafico de ingresos cargados y en los ultimos
+        # movimientos, y ahi estan bien. Lo que no puede pasar es que sean el
+        # ingreso del EVA.
+        analisis = self.analisis_del_dashboard(self.roman_id)
+        self.assertEqual(150000.0, analisis['ingresos'],
+                         'Los ingresos del EVA tienen que ser la venta. Si '
+                         'dan 999999 el aporte de capital volvio a contarse '
+                         'como facturacion; si dan 1149999 se estan contando '
+                         'los dos y ademas se duplica.')
         self.assertIn('$21000', texto)         # utilidad neta
         self.assertIn('20.0%', texto)          # margen
         self.assertIn('7.0%', texto)           # ROI

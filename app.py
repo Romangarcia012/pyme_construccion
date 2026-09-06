@@ -109,7 +109,11 @@ from rutas_productos import productos_bp
 app.register_blueprint(productos_bp)
 
 # MARGEN POR PRODUCTO Y CANAL (FASE-REPORTES-S3-MARGEN)
-from rutas_reportes import reportes_bp
+# FASE-EVA-S4: de aca sale ademas `facturado_neto`, que es lo que el dashboard
+# usa como ingresos. Se importa junto al blueprint y no arriba del archivo
+# porque rutas_reportes arrastra la cadena entera de blueprints, y esa cadena
+# necesita que `app` y `db` ya existan.
+from rutas_reportes import reportes_bp, facturado_neto
 app.register_blueprint(reportes_bp)
 
 # DEVOLUCIONES Y VUELTA DE STOCK (FASE-DEVOLUCIONES-S2)
@@ -604,7 +608,33 @@ def dashboard():
     # eva_utils opera con floats (tasa_impuestos/capital_invertido son Float),
     # asi que convertimos los totales Decimal en el borde para no mezclar tipos.
     total_gastos = float(sum(g.monto for g in gastos))
-    total_ingresos = float(sum(i.monto for i in ingresos))
+
+    # FASE-EVA-S4: los ingresos del EVA son las VENTAS, no la tabla Ingreso.
+    #
+    # Hasta aca esta linea era `float(sum(i.monto for i in ingresos))`, y eso
+    # dejo de significar lo que decia en FASE-AUDITORIA-EXCEL-S3: ese dia las
+    # ventas SALIERON de Ingreso -- se cargaban a mano y duplicaban lo que ya
+    # vivia en Pedido -- y desde entonces la tabla tiene una sola cosa, el
+    # aporte de capital de los socios.
+    #
+    # O sea que el dashboard venia comparando el APORTE contra los gastos y
+    # llamando "margen" al resultado. En Korvo eso daba -33.000 y pintaba de
+    # rojo los cuatro indicadores, con un negocio que en realidad factura: la
+    # plata que los socios pusieron no es lo que la empresa vendio, y medir
+    # rentabilidad con ella es medir otra cosa.
+    #
+    # `facturado_neto` es la MISMA funcion que usan /reportes/caja-socio y
+    # /reportes/resumen-general. No es una consulta nueva que da lo mismo: es
+    # la misma, y por eso el numero del dashboard no puede separarse del de
+    # los reportes sin que alguien lo haga a proposito.
+    #
+    # Lo que NO cambia: el aporte de capital sigue entero en Ingreso, en
+    # /caja-general y en /reportes/resumen-general, que es donde contesta la
+    # pregunta que si es suya ("cuanta plata entro en total"). Y
+    # `Empresa.capital_invertido` -- el campo de /config/eva -- es otra cosa
+    # todavia: es la base del costo de capital, no un ingreso, y esta slice no
+    # lo toca.
+    total_ingresos = float(facturado_neto(empresa_id).neto)
 
     # FASE-EVA-S3: sobre cuantos dias se estan sumando esos dos totales.
     #

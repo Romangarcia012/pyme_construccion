@@ -189,8 +189,20 @@ def generar_analisis_completo(ingresos_totales, gastos_totales, config,
     utilidad_neta = utilidad_bruta - impuestos
 
     # None = no hay ningun movimiento del cual medir el periodo. Se cae al
-    # supuesto viejo en vez de partir la funcion en dos: sin movimientos el EVA
-    # queda en None mas abajo igual, asi que este numero no llega a pantalla.
+    # supuesto viejo en vez de partir la funcion en dos.
+    #
+    # FASE-EVA-S4 le abrio un caso que antes no existia. Cuando `ingresos` era
+    # SUM(Ingreso.monto), un None aca implicaba ingresos y gastos en 0 -- el
+    # periodo sale del MIN(fecha) de esas dos tablas (app.py) -- y entonces el
+    # EVA quedaba en None mas abajo y este 365 no llegaba a pantalla. Ahora
+    # los ingresos salen de Pedido, asi que una empresa con ventas y sin una
+    # sola fila de Gasto ni de Ingreso tiene `hay_movimiento` en True con el
+    # periodo desconocido: el costo de capital se le cobra como un anio entero.
+    #
+    # No se corrige aca a proposito -- el periodo lo arma el llamador y meterle
+    # las fechas de los pedidos es cambiar el prorrateo de S3, que es otra
+    # slice. La pantalla no miente mientras tanto: `periodo_conocido` viaja en
+    # False y el dashboard ya dice que el periodo no se conoce.
     dias = (DIAS_DEL_ANIO if dias_transcurridos is None
             else max(1, int(dias_transcurridos)))
 

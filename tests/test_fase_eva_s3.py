@@ -40,7 +40,7 @@ productiva no se toca.
 import os
 import sys
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -49,10 +49,12 @@ import eva_utils  # noqa: E402
 
 from app import app  # noqa: E402
 from models import (  # noqa: E402
+    CanalVenta,
     Categoria,
     Empresa,
     Gasto,
     Ingreso,
+    Pedido,
     Usuario,
     db,
 )
@@ -291,8 +293,15 @@ class BaseDashboard(unittest.TestCase):
         self.ctx.pop()
 
     def cargar(self, hace_dias, monto_ingreso=INGRESOS, monto_gasto=GASTOS):
+        """Un ingreso y un gasto fechados hace `hace_dias`.
+
+        Los dos son lo que arma el PERIODO -- que es de lo que habla esta
+        suite --, y eso no cambio en FASE-EVA-S4: el MIN(fecha) sigue saliendo
+        de gasto e ingreso. Lo que cambio es que el monto del Ingreso ya no es
+        lo que el dashboard llama ingresos; para eso esta `cargar_venta`.
+        """
         fecha = date.today() - timedelta(days=hace_dias)
-        db.session.add(Ingreso(descripcion='Venta', monto=Decimal(monto_ingreso),
+        db.session.add(Ingreso(descripcion='Aporte', monto=Decimal(monto_ingreso),
                                fecha=fecha, empresa_id=self.empresa_id,
                                usuario_id=self.roman_id,
                                categoria_id=self.cat_ingreso_id))
@@ -300,6 +309,29 @@ class BaseDashboard(unittest.TestCase):
                              fecha=fecha, empresa_id=self.empresa_id,
                              usuario_id=self.roman_id,
                              categoria_id=self.cat_gasto_id))
+        db.session.commit()
+
+    def cargar_venta(self, monto=INGRESOS):
+        """La venta que hoy es "ingresos" para el dashboard (FASE-EVA-S4).
+
+        Va aparte de `cargar` porque contesta otra pregunta: `cargar` fija el
+        periodo, esto fija el ingreso. Los tests que solo miran el periodo no
+        necesitan una venta, y los que miran el EVA en pantalla necesitan las
+        dos cosas.
+        """
+        canal = CanalVenta.query.filter_by(empresa_id=self.empresa_id).first()
+        if canal is None:
+            canal = CanalVenta(empresa_id=self.empresa_id, tipo='manual',
+                               nombre='Venta manual', activo=True)
+            db.session.add(canal)
+            db.session.commit()
+
+        db.session.add(Pedido(empresa_id=self.empresa_id, canal_id=canal.id,
+                              fecha_pedido=datetime(2026, 9, 1, 12, 0),
+                              estado='open', comprador_nombre='Camila',
+                              total=Decimal(str(monto)),
+                              total_envio=Decimal('0.00'),
+                              comision_plataforma=Decimal('0.00')))
         db.session.commit()
 
     def texto_del_dashboard(self):
@@ -347,8 +379,16 @@ class TestPeriodoEnPantalla(BaseDashboard):
         self.assertIn('día de operación', texto)
 
     def test_el_eva_de_la_pantalla_es_el_prorrateado(self):
-        """El numero grande y la nota de abajo cuentan la misma historia."""
+        """El numero grande y la nota de abajo cuentan la misma historia.
+
+        Hasta FASE-EVA-S4 alcanzaba con `cargar`, porque el Ingreso que
+        fechaba el periodo era ademas el ingreso de la cuenta. Ahora son dos
+        cosas distintas y hacen falta las dos filas: la del periodo (45 dias)
+        y la venta que da la utilidad. El prorrateo que prueba esta clase no
+        cambio -- el costo sigue saliendo de los mismos 45 dias.
+        """
         self.cargar(hace_dias=45)
+        self.cargar_venta()
         costo = CAPITAL * (TASA / 100) * (45 / 365)
 
         texto = self.texto_del_dashboard()

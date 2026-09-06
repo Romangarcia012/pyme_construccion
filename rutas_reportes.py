@@ -57,7 +57,7 @@ FASE-CAJA-SOCIO-S1 agrego una segunda pantalla en el mismo blueprint,
 pie del archivo, arriba de su propia ruta.
 """
 
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 from decimal import ROUND_HALF_UP, Decimal
 
 from flask import Blueprint, render_template, url_for
@@ -1015,6 +1015,59 @@ def caja_socio():
 # ==========================================================================
 
 
+class FacturadoNeto(namedtuple('FacturadoNeto',
+                               'neto bruto comision pedidos sin_comision')):
+    """Lo que dejaron las ventas de una empresa, en una sola pieza.
+
+        bruto        SUM(pedido.total - pedido.total_envio), sin cancelados
+                     y sin regalos
+        comision     SUM(pedido.comision_plataforma) de esos mismos pedidos
+        neto         bruto - comision
+        pedidos      cuantos entraron a la suma
+        sin_comision cuantos de esos no tienen la comision cargada
+
+    `neto` y `bruto` viajan JUNTOS y no se elige uno al escribir la funcion,
+    porque las dos pantallas que la usan necesitan cosas distintas de la misma
+    cuenta: resumen-general muestra la resta escrita en dos lineas -- si el
+    bruto ya viniera neto, la unica forma de saber cuanto se quedo la
+    plataforma seria mirar otro reporte -- y el dashboard solo quiere el
+    numero final. Devolver una sola de las dos obligaria a la otra a rehacer
+    la resta por su cuenta, que es exactamente como se separan dos numeros que
+    tenian que ser el mismo.
+    """
+
+
+def facturado_neto(empresa_id):
+    """Cuanta plata dejaron las ventas. La UNICA definicion de eso.
+
+    La usan /reportes/resumen-general y el dashboard (FASE-EVA-S4), y sale de
+    `_facturado_por_canal` -- la misma consulta que reparte la facturacion por
+    socio en /reportes/caja-socio. Los tres numeros no pueden separarse sin
+    que alguien lo haga a proposito.
+
+    Que quede afuera lo dice esa consulta y no esta funcion: los cancelados
+    (no le entraron a nadie), los regalos (no entro plata) y el envio (se
+    cobra y se le paga al correo el mismo dia). El detalle de por que, en su
+    docstring.
+
+    LOS PEDIDOS SIN COMISION CARGADA no se restan como cero: `sum()` ignora
+    los NULL, asi que `neto` ya sale bien, y el contador viaja al lado para
+    que quien muestre el numero pueda decir en que direccion esta incompleto.
+    Mientras haya alguno, `neto` esta por ARRIBA del que va a terminar siendo.
+
+    Devuelve Decimals. Quien trabaje en float -- el dashboard, porque
+    `capital_invertido` y las tasas son Float -- convierte en su borde, que es
+    donde ya lo hacia con los gastos.
+    """
+    facturado = _facturado_por_canal(empresa_id)
+    bruto = sum((fila[0] for fila in facturado.values()), CERO)
+    pedidos = sum(fila[1] for fila in facturado.values())
+    comision = sum((fila[2] for fila in facturado.values()), CERO)
+    sin_comision = sum(fila[3] for fila in facturado.values())
+    return FacturadoNeto(neto=bruto - comision, bruto=bruto, comision=comision,
+                         pedidos=pedidos, sin_comision=sin_comision)
+
+
 def _total_ingresos(empresa_id):
     """(suma, cantidad) de TODO lo cargado como Ingreso.
 
@@ -1066,14 +1119,10 @@ def resumen_general():
     """
     empresa_id = current_user.empresa_id
 
-    # Las ventas salen de la MISMA funcion que caja-socio. No es una consulta
-    # nueva que da lo mismo: es la misma, y por eso los dos numeros no se
-    # pueden separar sin que alguien lo haga a proposito.
-    facturado = _facturado_por_canal(empresa_id)
-    ventas_monto = sum((fila[0] for fila in facturado.values()), CERO)
-    ventas_pedidos = sum(fila[1] for fila in facturado.values())
-    comision_monto = sum((fila[2] for fila in facturado.values()), CERO)
-    sin_comision = sum(fila[3] for fila in facturado.values())
+    # Las ventas salen de la MISMA funcion que caja-socio y que el dashboard.
+    # No es una consulta nueva que da lo mismo: es la misma, y por eso los
+    # numeros no se pueden separar sin que alguien lo haga a proposito.
+    ventas = facturado_neto(empresa_id)
 
     regalos = sum(_regalos_por_canal(empresa_id).values())
 
@@ -1083,16 +1132,16 @@ def resumen_general():
     # omitido para no abrirle a `_total_gastos` una segunda forma de llamarse.
     gastos_monto, gastos_cantidad = _total_gastos(empresa_id, true())
 
-    entra = capital_monto + ventas_monto - comision_monto
+    entra = capital_monto + ventas.neto
     posicion_real = entra - gastos_monto
 
     return render_template('reportes_resumen_general.html',
                            capital_monto=capital_monto,
                            capital_cantidad=capital_cantidad,
-                           ventas_monto=ventas_monto,
-                           ventas_pedidos=ventas_pedidos,
-                           comision_monto=comision_monto,
-                           sin_comision=sin_comision,
+                           ventas_monto=ventas.bruto,
+                           ventas_pedidos=ventas.pedidos,
+                           comision_monto=ventas.comision,
+                           sin_comision=ventas.sin_comision,
                            regalos=regalos,
                            gastos_monto=gastos_monto,
                            gastos_cantidad=gastos_cantidad,
