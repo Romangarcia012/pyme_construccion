@@ -649,11 +649,14 @@ def dashboard():
     # FASE-EVA-S5: la pantalla se quedo con tres de los seis numeros.
     #
     # De este dict el dashboard hoy renderiza Ingresos por Ventas, Gastos
-    # Totales y Ganancia Neta (mas las recomendaciones del pie). Margen, ROI y
-    # EVA se sacaron de la pantalla: comparan compras historicas -- mercaderia
-    # que en buena parte sigue en el deposito -- contra ventas historicas, y
-    # eso es flujo de caja, no rentabilidad. El margen real vive en
-    # /reportes/margen, que descuenta el costo de lo VENDIDO.
+    # Totales y Flujo de Caja -- la tarjeta que hasta FASE-EVA-S6 se llamaba
+    # "Ganancia Neta": mismo `utilidad_neta`, otro nombre, porque prometia
+    # rentabilidad sobre un numero que es caja -- mas las recomendaciones del
+    # pie. Margen, ROI y EVA se sacaron de la pantalla: comparan compras
+    # historicas -- mercaderia que en buena parte sigue en el deposito --
+    # contra ventas historicas, y eso es flujo de caja, no rentabilidad. El
+    # margen real vive en /reportes/margen, que descuenta el costo de lo
+    # VENDIDO.
     #
     # La llamada NO se toca. Es la que calcula los tres numeros que quedan
     # -- incluida la utilidad neta con su tasa de impuestos -- y sacarla

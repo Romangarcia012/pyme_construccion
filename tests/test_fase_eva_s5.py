@@ -22,9 +22,14 @@ este negocio.
 
 QUE SE QUEDO
 
-Ingresos por Ventas, Gastos Totales y Ganancia Neta. Los tres dicen algo cierto
-sin interpretacion: cuanta plata entro por ventas, cuanta salio, y la diferencia
-despues de impuestos. No son rentabilidad y no se presentan como tal.
+Ingresos por Ventas, Gastos Totales y la tercera tarjeta. Los tres dicen algo
+cierto sin interpretacion: cuanta plata entro por ventas, cuanta salio, y la
+diferencia despues de impuestos. No son rentabilidad y no se presentan como tal.
+
+(FASE-EVA-S6 le corrigio el nombre a esa tercera: se llamaba "Ganancia Neta" y
+ahora se llama "Flujo de Caja". La cuenta -- `analisis['utilidad_neta']` -- es
+la misma, y por eso las afirmaciones numericas de esta suite no se movieron;
+lo unico que se actualizo aca es el texto que se busca en la pantalla.)
 
 LO QUE NO SE BORRO, A PROPOSITO
 
@@ -367,7 +372,10 @@ class TestLosTresQueQuedan(BaseEvaS5):
         self.assertIn('$150000', texto)
         self.assertIn('Gastos Totales', texto)
         self.assertIn('$120000', texto)
-        self.assertIn('Ganancia Neta', texto)
+        # FASE-EVA-S6: el titulo es "Flujo de Caja" desde entonces. El valor
+        # que se afirma es el mismo $21000 de siempre: la slice renombro la
+        # tarjeta, no la cuenta.
+        self.assertIn('Flujo de Caja', texto)
         self.assertIn('$21000', texto)
 
     def test_los_ingresos_siguen_siendo_las_ventas_y_no_el_aporte(self):

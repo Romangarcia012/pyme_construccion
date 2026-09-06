@@ -312,6 +312,26 @@
             font-weight: 600;
         }
         
+        /* FASE-EVA-S6: la aclaracion de "Flujo de Caja" cuando da negativo.
+           Deliberadamente gris y sin fondo de color: no es un cuarto semaforo,
+           es la letra chica que explica por que el rojo de arriba no quiere
+           decir lo que parece. */
+        .card .nota {
+            margin-top: 10px;
+            font-size: 11px;
+            line-height: 1.5;
+            color: #a0a0a0;
+        }
+
+        .card .nota a {
+            color: #1e90ff;
+            text-decoration: none;
+        }
+
+        .card .nota a:hover {
+            text-decoration: underline;
+        }
+
         .excelente {
             border-left: 4px solid #28a745;
         }
@@ -672,13 +692,40 @@
                 <div class="status">Dinero gastado</div>
             </div>
     
-            {# Sin un solo movimiento cargado la ganancia neta da 0, y 0 no es
-               "> 0", asi que el card salia en rojo. Otra alarma que no
-               diagnostica nada: es el mismo cero de la cuenta vacia. #}
+            {# Sin un solo movimiento cargado el numero da 0, y 0 no es "> 0",
+               asi que el card salia en rojo. Otra alarma que no diagnostica
+               nada: es el mismo cero de la cuenta vacia.
+
+               FASE-EVA-S6: la tarjeta se llamaba "Ganancia Neta / Ganancia
+               real" y el nombre mentia por el mismo motivo que Margen, ROI y
+               EVA se fueron en S5. La cuenta resta TODO lo gastado -- incluida
+               la mercaderia que sigue en el deposito sin vender -- contra las
+               ventas ya hechas. Mientras se reinvierta lo que entra en mas
+               stock ese numero va a estar en rojo siempre, y "Ganancia real"
+               en rojo se lee como "estas perdiendo plata".
+
+               El numero NO se toca: es cierto y es util -- cuanta plata entro
+               por ventas menos cuanta salio, despues de impuestos. Lo unico
+               que cambia es como se llama. La rentabilidad de verdad esta en
+               /reportes/margen, que descuenta el costo de lo VENDIDO.
+
+               El color se sigue decidiendo por el signo, y esta bien: rojo
+               sobre "Flujo de Caja" describe la caja, no un fracaso. Lo que
+               enganaba era el nombre. #}
             <div class="card {% if not analisis.hay_movimiento %}neutral{% elif analisis.utilidad_neta > 0 %}excelente{% else %}malo{% endif %}">
-                <h3>Ganancia Neta</h3>
+                <h3>Flujo de Caja</h3>
                 <div class="value">${{ "%.0f"|format(analisis.utilidad_neta) }}</div>
-                <div class="status">{% if analisis.hay_movimiento %}Ganancia real{% else %}Sin movimientos todavía{% endif %}</div>
+                <div class="status">{% if analisis.hay_movimiento %}Ventas menos todo lo gastado (incluida mercadería sin vender){% else %}Sin movimientos todavía{% endif %}</div>
+                {# La aclaracion sale solo cuando el numero da negativo, que es
+                   cuando se lee como una mala noticia. En positivo no hay nada
+                   que aclarar. #}
+                {% if analisis.hay_movimiento and analisis.utilidad_neta < 0 %}
+                <div class="nota">
+                    Negativo mientras reinviertan en stock: no significa
+                    pérdida real. Para saber si el negocio rinde, mirá
+                    <a href="{{ url_for('reportes.margen') }}">Margen y Ganancia</a>.
+                </div>
+                {% endif %}
             </div>
         </div>
 
@@ -698,8 +745,10 @@
            lo abre por producto y por canal.
 
            Queda la fila de arriba -- Ingresos por Ventas, Gastos Totales y
-           Ganancia Neta -- que si dice algo cierto: cuanta plata entro y
+           Flujo de Caja -- que si dice algo cierto: cuanta plata entro y
            cuanta salio. No son rentabilidad y no se presentan como tal.
+           (La tercera se llamaba "Ganancia Neta" hasta FASE-EVA-S6, que le
+           corrigio el nombre sin tocarle la cuenta.)
 
            El calculo NO se borro: `generar_analisis_completo` sigue
            devolviendo margen/roi/eva y el prorrateo de S3 sigue en su lugar
