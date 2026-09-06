@@ -319,10 +319,31 @@
                 <div class="form-section">
                     <div class="section-title">Configuracion Financiera (EVA)</div>
                     
+                    {# FASE-EVA-S5: este cuadro decia "estos valores se usan
+                       para calcular el EVA... el EVA mide si tu empresa
+                       realmente esta generando valor", y desde esta slice el
+                       EVA no se muestra en ninguna pantalla. Prometia un
+                       numero que ya no existe a la vista.
+
+                       La pantalla NO se saco -- los tres campos se siguen
+                       guardando y el calculo sigue entero en eva_utils -- pero
+                       el texto tiene que decir la verdad: hoy esto no se ve en
+                       el dashboard, y para saber si el negocio gana plata el
+                       lugar es "Margen y Ganancia". #}
                     <div class="info-box">
                         <strong>Que es esto?</strong><br>
-                        Estos valores se usan para calcular el EVA (Valor Economico Agregado). 
-                        El EVA mide si tu empresa realmente esta generando valor.
+                        El costo de capital y el capital invertido alimentan el
+                        calculo del EVA (Valor Economico Agregado), que hoy
+                        <strong>no se muestra en el dashboard</strong>: comparaba
+                        toda la mercaderia comprada contra lo vendido, y eso mide
+                        la caja, no la rentabilidad. Los valores se guardan igual
+                        por si el calculo se retoma.<br><br>
+                        Para ver si el negocio gana plata de verdad, el reporte es
+                        <a href="{{ url_for('reportes.margen') }}">Margen y Ganancia</a>,
+                        que descuenta el costo de lo que efectivamente se vendio.<br><br>
+                        La <strong>tasa de impuestos</strong> si se sigue usando:
+                        es la que convierte la ganancia bruta en la
+                        <strong>Ganancia Neta</strong> del dashboard.
                     </div>
                     
                     <div class="valores-actuales">

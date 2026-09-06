@@ -646,6 +646,25 @@ def dashboard():
     fechas = [g.fecha for g in gastos] + [i.fecha for i in ingresos]
     dias = dias_de_operacion(min(fechas) if fechas else None)
 
+    # FASE-EVA-S5: la pantalla se quedo con tres de los seis numeros.
+    #
+    # De este dict el dashboard hoy renderiza Ingresos por Ventas, Gastos
+    # Totales y Ganancia Neta (mas las recomendaciones del pie). Margen, ROI y
+    # EVA se sacaron de la pantalla: comparan compras historicas -- mercaderia
+    # que en buena parte sigue en el deposito -- contra ventas historicas, y
+    # eso es flujo de caja, no rentabilidad. El margen real vive en
+    # /reportes/margen, que descuenta el costo de lo VENDIDO.
+    #
+    # La llamada NO se toca. Es la que calcula los tres numeros que quedan
+    # -- incluida la utilidad neta con su tasa de impuestos -- y sacarla
+    # obligaria a reescribir esa cuenta aca, que es exactamente la clase de
+    # duplicado que este archivo viene limpiando. Las claves que ya no se
+    # muestran viajan hasta la plantilla sin renderizarse; el porque de dejar
+    # la cuenta viva esta en el docstring de `generar_analisis_completo`.
+    #
+    # Y por eso `dias` tampoco se saco: es la unica entrada del prorrateo de
+    # S3, que sigue alimentando un `costo_capital` que hoy nadie mira. Cuesta
+    # un min() sobre dos listas que ya estan en memoria.
     analisis = generar_analisis_completo(total_ingresos, total_gastos, config,
                                          dias)
     gastos_cat = gastos_por_categoria(gastos)

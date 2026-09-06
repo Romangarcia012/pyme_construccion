@@ -374,6 +374,12 @@ class TestDashboardConDatos(BaseEva):
         ingreso, no como se calcula con el. Lo que se agrega es el aporte de
         999999: un numero que TIENE que estar cargado y NO puede aparecer en
         pantalla. Sin el, este test pasaria igual con el bug puesto de vuelta.
+
+        FASE-EVA-S5 partio el test en dos mitades que antes eran una sola. Los
+        numeros que la PANTALLA muestra quedaron en tres -- ingresos, gastos y
+        ganancia neta --; margen, ROI y EVA se siguen calculando pero ya no se
+        renderizan. Las afirmaciones sobre el texto se dieron vuelta y las de
+        la cuenta se mudaron al dict.
         """
         self.cargar_movimientos(ingreso='999999.00', gasto='120000.00')
         self.cargar_venta('150000.00')
@@ -399,14 +405,34 @@ class TestDashboardConDatos(BaseEva):
                          'como facturacion; si dan 1149999 se estan contando '
                          'los dos y ademas se duplica.')
         self.assertIn('$21000', texto)         # utilidad neta
-        self.assertIn('20.0%', texto)          # margen
-        self.assertIn('7.0%', texto)           # ROI
-        self.assertIn('$-9000', texto)         # EVA
 
-        # Y el semaforo vuelve a opinar, que es lo que corresponde cuando SI
-        # hay con que.
+        # FASE-EVA-S5: margen, ROI y EVA ya NO estan en la pantalla.
+        #
+        # Este test decia `assertIn('20.0%')`, `assertIn('7.0%')`,
+        # `assertIn('$-9000')` y `assertIn('❌ No rentable')`. Las cuatro
+        # afirmaciones eran ciertas y dejaron de serlo A PROPOSITO: los tres
+        # indicadores comparaban compras historicas contra ventas historicas,
+        # o sea caja disfrazada de rentabilidad, y se sacaron del dashboard.
+        # El margen real vive en /reportes/margen.
+        #
+        # Se dan vuelta en vez de borrarse: asi este test sigue siendo el que
+        # vigila que no vuelvan solos a la pantalla. La FORMULA, que no se
+        # borro, la congela `test_la_formula_no_cambio` aca abajo y toda
+        # TestProrrateo en test_fase_eva_s3.
+        self.assertNotIn('20.0%', texto)       # margen
+        self.assertNotIn('7.0%', texto)        # ROI
+        self.assertNotIn('$-9000', texto)      # EVA
+        self.assertNotIn('❌ No rentable', texto)
+
+        # Pero los numeros SIGUEN calculados y siguen llegando a la plantilla:
+        # lo que se saco es lo que se renderiza, no la cuenta.
+        self.assertAlmostEqual(20.0, analisis['margen_ganancia'])
+        self.assertAlmostEqual(7.0, analisis['roi'])
+        self.assertAlmostEqual(-9000.0, analisis['eva'])
+
+        # Y el pie de la pantalla deja de decir que falta cargar, que es lo que
+        # corresponde cuando SI hay con que.
         self.assertNotIn('Todavía no cargaste', texto)
-        self.assertIn('❌ No rentable', texto)
 
     def test_la_formula_no_cambio(self):
         """Congela la cuenta entera contra los valores de antes de la slice.

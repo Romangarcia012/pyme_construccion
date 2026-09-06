@@ -33,6 +33,15 @@ sirve de sustituto -- es cuando se dio de alta la cuenta en este sistema, no
 cuando arranco el negocio. `TestDeDondeSaleElPeriodo` lo deja fijado para que
 nadie lo cambie por el campo equivocado sin darse cuenta.
 
+QUE LE HIZO FASE-EVA-S5 A ESTE ARCHIVO
+
+Nada a la formula: TestDeDondeSaleElPeriodo y TestProrrateo estan intactos, y
+el prorrateo sigue calculandose en cada /dashboard. Lo que cambio es donde se
+afirma: la nota "Costo de capital calculado sobre N días" colgaba del card de
+EVA, y ese card salio del dashboard. Los tests que la buscaban en el HTML ahora
+miran el dict que la ruta le pasa a la plantilla. El porque esta en el docstring
+de TestPeriodoDelDashboard.
+
 Como en las slices anteriores, la app se repunta a SQLite en memoria: la base
 productiva no se toca.
 """
@@ -251,7 +260,12 @@ class TestProrrateo(unittest.TestCase):
 
 
 # =====================================================================
-# PARTE 2b - Que se vea en pantalla
+# PARTE 2b - El periodo por el camino real (la ruta, no la formula sola)
+#
+# Se llamaba "Que se vea en pantalla" hasta FASE-EVA-S5, que saco del dashboard
+# las tarjetas de margen/ROI/EVA y con ellas la nota que mostraba el periodo.
+# El calculo no se toco: sigue haciendose en /dashboard sobre las filas reales,
+# y es lo que estas clases fijan.
 # =====================================================================
 
 class BaseDashboard(unittest.TestCase):
@@ -347,17 +361,66 @@ class BaseDashboard(unittest.TestCase):
         finally:
             self.ctx.push()
 
+    def analisis_del_dashboard(self):
+        """El dict que /dashboard le pasa a la plantilla.
 
-class TestPeriodoEnPantalla(BaseDashboard):
+        FASE-EVA-S5: hace falta porque el periodo dejo de estar EN la pantalla.
+        Seguia siendo el mismo calculo, hecho por el mismo camino real -- la
+        ruta, con las filas en la base --, pero ya no hay texto donde buscarlo.
+        Mirar el dict es lo mas cerca de la pantalla que se puede afirmar sin
+        inventar una linea que no existe.
+        """
+        from flask import template_rendered
 
-    def test_periodo_visible_en_pantalla(self):
-        """El numero deja de ser opaco: la pantalla dice sobre que se prorrateo."""
+        capturado = {}
+
+        def anotar(remitente, template, context, **extra):
+            capturado.setdefault('ctx', context)
+
+        self.ctx.pop()
+        try:
+            cli = app.test_client()
+            with cli.session_transaction() as sesion:
+                sesion['_user_id'] = str(self.roman_id)
+                sesion['_fresh'] = True
+            template_rendered.connect(anotar, app)
+            try:
+                cli.get('/dashboard', follow_redirects=True)
+            finally:
+                template_rendered.disconnect(anotar, app)
+        finally:
+            self.ctx.push()
+
+        return capturado.get('ctx', {}).get('analisis', {})
+
+
+class TestPeriodoDelDashboard(BaseDashboard):
+    """El periodo que la RUTA calcula, con filas de verdad en la base.
+
+    ANTES SE LLAMABA TestPeriodoEnPantalla, Y AFIRMABA SOBRE EL TEXTO
+
+    Los tests de esta clase buscaban en el HTML la nota "Costo de capital
+    calculado sobre 45 días de operación" que colgaba del card de EVA. Esa nota
+    se fue con el card en FASE-EVA-S5: margen, ROI y EVA salieron del dashboard
+    porque comparaban compras historicas contra ventas historicas -- caja con
+    nombre de rentabilidad --, y el margen real ya vive en /reportes/margen.
+
+    Lo que la nota explicaba NO se fue: la ruta sigue calculando el periodo
+    desde el primer movimiento y sigue prorrateando el costo de capital con el
+    (app.py). Eso es lo que estos tests siguen fijando, ahora sobre el dict que
+    /dashboard le pasa a la plantilla en vez de sobre el texto renderizado.
+
+    No se borraron porque lo que probaban no era la nota: era que el periodo
+    salga del MIN de las fechas reales y no de la fila mas nueva. Ese bug puede
+    volver igual sin que nadie mire la pantalla, y el dia que se retome el EVA
+    la nota vuelve sobre un calculo que nunca dejo de estar probado.
+    """
+
+    def test_el_periodo_sale_de_las_filas_reales(self):
+        """45 dias entre el primer movimiento y hoy, contados por la ruta."""
         self.cargar(hace_dias=45)
 
-        texto = self.texto_del_dashboard()
-
-        self.assertIn('Costo de capital calculado sobre 45', texto)
-        self.assertIn('días de operación', texto)
+        self.assertEqual(45, self.analisis_del_dashboard()['dias_transcurridos'])
 
     def test_el_dashboard_usa_el_primer_movimiento_y_no_el_ultimo(self):
         """Con dos movimientos, manda el mas viejo.
@@ -368,49 +431,74 @@ class TestPeriodoEnPantalla(BaseDashboard):
         self.cargar(hace_dias=200)
         self.cargar(hace_dias=10)
 
-        self.assertIn('sobre 200', self.texto_del_dashboard())
+        self.assertEqual(200,
+                         self.analisis_del_dashboard()['dias_transcurridos'])
 
-    def test_un_solo_dia_se_dice_en_singular(self):
+    def test_un_solo_dia_no_es_cero_dias(self):
+        """Cargado hoy mismo: 1, que es el guard de division por cero."""
         self.cargar(hace_dias=0)
 
-        texto = self.texto_del_dashboard()
+        self.assertEqual(1, self.analisis_del_dashboard()['dias_transcurridos'])
 
-        self.assertIn('sobre 1', texto)
-        self.assertIn('día de operación', texto)
+    def test_el_eva_de_la_ruta_es_el_prorrateado(self):
+        """El prorrateo de S3 sigue vivo aunque nadie lo mire.
 
-    def test_el_eva_de_la_pantalla_es_el_prorrateado(self):
-        """El numero grande y la nota de abajo cuentan la misma historia.
+        Hasta FASE-EVA-S4 alcanzaba con `cargar`, porque el Ingreso que fechaba
+        el periodo era ademas el ingreso de la cuenta. Ahora son dos cosas
+        distintas y hacen falta las dos filas: la del periodo (45 dias) y la
+        venta que da la utilidad.
 
-        Hasta FASE-EVA-S4 alcanzaba con `cargar`, porque el Ingreso que
-        fechaba el periodo era ademas el ingreso de la cuenta. Ahora son dos
-        cosas distintas y hacen falta las dos filas: la del periodo (45 dias)
-        y la venta que da la utilidad. El prorrateo que prueba esta clase no
-        cambio -- el costo sigue saliendo de los mismos 45 dias.
+        FASE-EVA-S5 le saco el `assertIn` sobre el texto -- el numero no se
+        renderiza mas -- y le dejo la misma cuenta sobre el dict. El
+        `assertNotEqual` contra -9000 es el que importa: -9000 es el EVA con el
+        anio entero cobrado, o sea el bug que S3 arreglo.
         """
         self.cargar(hace_dias=45)
         self.cargar_venta()
         costo = CAPITAL * (TASA / 100) * (45 / 365)
 
-        texto = self.texto_del_dashboard()
+        analisis = self.analisis_del_dashboard()
 
-        self.assertIn('$%.0f' % (UTILIDAD_NETA - costo), texto)
-        self.assertIn('$%.0f' % costo, texto)
-        self.assertNotIn('$-9000', texto)
+        self.assertAlmostEqual(costo, analisis['costo_capital'], places=6)
+        self.assertAlmostEqual(UTILIDAD_NETA - costo, analisis['eva'], places=6)
+        self.assertNotAlmostEqual(-9000.0, analisis['eva'], places=2)
 
-    def test_sin_movimientos_no_habla_de_periodo(self):
-        """El estado neutral de S2 no gana una linea que no puede llenar."""
-        texto = self.texto_del_dashboard()
+    def test_sin_movimientos_no_hay_periodo(self):
+        """El estado neutral de S2 sigue sin inventar un periodo."""
+        analisis = self.analisis_del_dashboard()
 
-        self.assertNotIn('Costo de capital calculado sobre', texto)
-        self.assertNotIn('de operación', texto)
+        self.assertFalse(analisis['periodo_conocido'])
+        self.assertIsNone(analisis['eva'])
 
     def test_el_estado_neutral_de_s2_sigue_intacto(self):
-        """La cuenta vacia sigue sin alarmas rojas."""
+        """La cuenta vacia sigue sin alarmas rojas en la pantalla."""
         texto = self.texto_del_dashboard()
 
         for alarma in ('❌ Mal', '❌ No rentable',
                        '¡ALERTA! Gastas más del 80% de tus ingresos'):
             self.assertNotIn(alarma, texto)
+
+
+class TestElPeriodoYaNoEstaEnPantalla(BaseDashboard):
+    """FASE-EVA-S5: la nota del card de EVA no puede volver sola.
+
+    El card se fue; la nota que colgaba de el, tambien. Si alguien vuelve a
+    renderizar el periodo en el dashboard tiene que ser una decision, no un
+    revert accidental de la plantilla.
+    """
+
+    def test_el_dashboard_no_habla_del_costo_de_capital(self):
+        self.cargar(hace_dias=45)
+        self.cargar_venta()
+
+        texto = self.texto_del_dashboard()
+
+        self.assertNotIn('Costo de capital calculado sobre', texto)
+        self.assertNotIn('de operación', texto)
+
+    # Que las TARJETAS de margen/ROI/EVA no esten es la afirmacion de la slice
+    # que las saco, y vive en tests/test_fase_eva_s5.py. Aca queda solo la nota
+    # al pie, que era de S3 y colgaba del card de EVA.
 
 
 if __name__ == '__main__':

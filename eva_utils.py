@@ -183,6 +183,44 @@ def generar_analisis_completo(ingresos_totales, gastos_totales, config,
         utilidad_bruta = ingresos - gastos
         utilidad_neta  = utilidad_bruta - utilidad_bruta * tasa_impuestos
         EVA            = utilidad_neta - costo_capital
+
+    QUE CAMBIO EN FASE-EVA-S5 (nada de esta funcion, y por eso hace falta
+    leerlo aca)
+
+    El dashboard dejo de MOSTRAR margen, ROI y EVA. Esta funcion los sigue
+    calculando y los sigue devolviendo -- no se borro una sola linea de la
+    cuenta -- pero de las claves que devuelve, la pantalla hoy usa solo estas
+    cinco:
+
+        ingresos, gastos, utilidad_neta, hay_movimiento, recomendaciones
+
+    Las otras (margen_ganancia, roi, eva, ratio_gastos, costo_capital,
+    dias_transcurridos, periodo_conocido y los cuatro `*_estado`) viajan hasta
+    la plantilla y no se renderizan.
+
+    POR QUE SE MOSTRABAN Y YA NO
+
+    Los tres comparan los gastos historicos contra las ventas historicas. En un
+    negocio que compra mercaderia para stock, buena parte de esos gastos es
+    plata que todavia esta en el deposito sin vender: la resta describe el
+    movimiento de caja, no la rentabilidad, y se estaba presentando con nombre
+    de rentabilidad. El margen real -- el que descuenta el costo de lo
+    efectivamente VENDIDO -- ya existe y esta bien hecho en /reportes/margen
+    (rutas_reportes.py), abierto por producto y por canal.
+
+    POR QUE NO SE BORRO LA CUENTA
+
+    Es la segunda vez que se revisa y las dos veces la conclusion fue la misma:
+    "no aplica al tamano de este negocio". Eso es una conclusion sobre el
+    NEGOCIO, no sobre el codigo. El dia que Korvo separe compras de costo de lo
+    vendido -- o que quiera medir el capital de los socios contra el resultado
+    -- la formula, el prorrateo de S3 y el estado neutral de S2 estan enteros y
+    probados. Borrarlos obligaria a re-derivar todo eso desde cero, incluidos
+    los tres guards de division por cero que costaron una slice entera.
+
+    Lo que si se saco es lo que llegaba a la pantalla: las tres tarjetas
+    (templates/dashboard.html) y los consejos que hablaban de esos numeros
+    (`generar_recomendaciones`, mas abajo).
     """
     utilidad_bruta = ingresos_totales - gastos_totales
     impuestos = utilidad_bruta * config.tasa_impuestos
@@ -268,13 +306,17 @@ def generar_analisis_completo(ingresos_totales, gastos_totales, config,
         "ratio_estado": evaluar_indicador(ratio_gastos, 0, 70,
                                           falta=falta_ingresos),
         "eva_estado": eva_estado,
-        "recomendaciones": generar_recomendaciones(
-            margen_ganancia, roi, ratio_gastos, eva, hay_movimiento, hay_capital
-        )
+        # FASE-EVA-S5: recibe DOS cosas donde antes recibia seis. Las cuatro
+        # que se fueron -- margen, roi, eva, hay_capital -- eran las que
+        # generaban consejos sobre indicadores que el dashboard ya no muestra.
+        # Los valores siguen calculados y siguen viajando en este mismo dict,
+        # arriba; lo que se saco es el texto que los ponia en pantalla.
+        "recomendaciones": generar_recomendaciones(ratio_gastos,
+                                                   hay_movimiento)
     }
 
 
-def generar_recomendaciones(margen, roi, ratio, eva, hay_movimiento, hay_capital):
+def generar_recomendaciones(ratio, hay_movimiento):
     """Las recomendaciones del pie del dashboard.
 
     Cada diagnostico se emite SOLO si su indicador se pudo calcular. Antes se
@@ -282,9 +324,30 @@ def generar_recomendaciones(margen, roi, ratio, eva, hay_movimiento, hay_capital
     cuenta vacia recibia "tu margen es muy bajo", "tu retorno es bajo" y
     "ALERTA! gastas mas del 80%": tres retos por no haber cargado nada.
 
-    Los ultimos dos parametros eran `ingresos, gastos` y solo se usaban para
-    preguntar `if ingresos == 0`. Ahora llegan ya resueltos como los dos
-    booleanos que de verdad deciden, que son los mismos que usa el semaforo.
+    QUE CAMBIO EN FASE-EVA-S5
+
+    Se fueron los tres consejos que hablaban de margen, ROI y EVA, y el que
+    pedia cargar el capital invertido "para ver el ROI y el EVA". Las cuatro
+    tarjetas de las que hablaban ya no estan en el dashboard (ver el comentario
+    del bloque que se saco en templates/dashboard.html): dejar los consejos
+    habria sido diagnosticar en el pie de la pantalla numeros que la pantalla
+    ya no muestra, y encima con la cuenta que se decidio no mostrar.
+
+    QUEDA el ratio de gastos, que es el unico de los cuatro que se arma con los
+    dos numeros que SI siguen en pantalla -- Ingresos por Ventas y Gastos
+    Totales -- y que ademas se enuncia por lo que es: cuanto de lo que entro se
+    fue en gastos. Es una frase de caja, no de rentabilidad.
+
+    OJO, y esta anotado a proposito: `ratio` y `margen_ganancia` son el MISMO
+    numero visto al reves (margen = 100 - ratio). La diferencia no esta en la
+    cuenta, esta en lo que cada uno afirma. "Margen 20%" dice "de cada peso que
+    vendiste ganaste 20 centavos", y eso es falso mientras los gastos incluyan
+    mercaderia que todavia no se vendio. "Gastaste el 80% de lo que entro" dice
+    exactamente lo que paso con la caja, y eso es cierto sin importar donde
+    este la mercaderia. Por eso uno se fue y el otro se queda.
+
+    El parametro `hay_movimiento` sigue igual: sin un solo movimiento no hay
+    nada que diagnosticar y se dice eso, en vez de retar por no haber cargado.
     """
     if not hay_movimiento:
         return [{
@@ -295,30 +358,6 @@ def generar_recomendaciones(margen, roi, ratio, eva, hay_movimiento, hay_capital
         }]
 
     recomendaciones = []
-
-    if margen is not None:
-        if margen < 10:
-            recomendaciones.append({
-                "tipo": "peligro",
-                "mensaje": "⚠️ Tu margen de ganancia es muy bajo. Necesitas reducir gastos o aumentar precios."
-            })
-        elif margen < 20:
-            recomendaciones.append({
-                "tipo": "advertencia",
-                "mensaje": "⚠️ Tu margen está bajo. Considera optimizar costos."
-            })
-
-    if roi is not None:
-        if roi < 10:
-            recomendaciones.append({
-                "tipo": "peligro",
-                "mensaje": "⚠️ Tu retorno sobre inversión es bajo."
-            })
-        elif roi < 15:
-            recomendaciones.append({
-                "tipo": "advertencia",
-                "mensaje": "💡 Podrías mejorar el retorno de tu inversión."
-            })
 
     if ratio is not None:
         if ratio > 80:
@@ -331,21 +370,6 @@ def generar_recomendaciones(margen, roi, ratio, eva, hay_movimiento, hay_capital
                 "tipo": "advertencia",
                 "mensaje": "⚠️ Tus gastos son demasiado altos."
             })
-
-    if eva is not None and eva < 0:
-        recomendaciones.append({
-            "tipo": "peligro",
-            "mensaje": "🚨 Tu EVA es negativo. No generas valor económico real."
-        })
-
-    # No es un reto: es lo que falta para que dos de los cuatro cuadros dejen de
-    # estar en gris.
-    if not hay_capital:
-        recomendaciones.append({
-            "tipo": "info",
-            "mensaje": "ℹ️ Para ver el ROI y el EVA, cargá el capital "
-                       "invertido en Configuración."
-        })
 
     if not recomendaciones:
         recomendaciones.append({

@@ -353,72 +353,14 @@
             color: #a0a0a0;
         }
 
-        /* FASE-EVA-S3: la nota al pie del card de EVA. Chica y gris a
-           proposito: explica el numero de arriba, no compite con el. */
-        .eva-periodo {
-            margin-top: 8px;
-            font-size: 0.75rem;
-            line-height: 1.35;
-            color: #a0a0a0;
-        }
+        /* FASE-EVA-S5: aca vivian .eva-periodo, .eva-container, .eva-value,
+           .eva-status, .eva-excelente y .eva-malo. Las dos primeras las usaba
+           el card de EVA, que se saco del body; las otras cuatro ya estaban
+           muertas antes de esta slice (ninguna aparecia en el HTML). Se van
+           todas juntas para no dejar CSS que nombra una pantalla que no
+           existe. `.neutral` NO se toca: la sigue usando el card de Ganancia
+           Neta cuando no hay movimientos. */
 
-        /* EVA */
-        .eva-container {
-            background: #1a1a1a;
-            padding: 25px;
-            border-radius: 8px;
-            border: 1px solid #2a2a2a;
-            margin-bottom: 25px;
-            text-align: center;
-        }
-        
-        .eva-container h3 {
-            color: #a0a0a0;
-            font-size: 12px;
-            margin-bottom: 10px;
-            text-transform: uppercase;
-        }
-        
-        .eva-value {
-            font-size: 36px;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
-        
-        .eva-status {
-            font-size: 12px;
-            padding: 8px 15px;
-            border-radius: 4px;
-            display: inline-block;
-            font-weight: 600;
-        }
-        
-        .eva-excelente {
-            border-left: 4px solid #28a745;
-        }
-        
-        .eva-excelente .eva-value {
-            color: #28a745;
-        }
-        
-        .eva-excelente .eva-status {
-            background: rgba(40, 167, 69, 0.1);
-            color: #28a745;
-        }
-        
-        .eva-malo {
-            border-left: 4px solid #dc3545;
-        }
-        
-        .eva-malo .eva-value {
-            color: #dc3545;
-        }
-        
-        .eva-malo .eva-status {
-            background: rgba(220, 53, 69, 0.1);
-            color: #dc3545;
-        }
-        
         /* CONTENEDOR 2 COLUMNAS */
         .content-container {
             display: grid;
@@ -638,10 +580,6 @@
                 padding: 15px;
             }
             
-            .eva-value {
-                font-size: 28px;
-            }
-            
             .seccion {
                 padding: 15px;
             }
@@ -744,47 +682,30 @@
             </div>
         </div>
 
-        <!-- CARDS PRINCIPALES - FILA 2 (Métricas) -->
-        <div class="cards-grid">
-            {# FASE-EVA-S2: la clase sale del propio estado, no de una segunda
-               comparacion escrita a mano en la plantilla. El card de ROI
-               decidia su color con `analisis.roi >= 15` mientras el texto de
-               abajo salia de `roi_estado`: dos fuentes para el mismo semaforo,
-               y desde que `roi` puede ser None esa comparacion ademas explota
-               (None >= 15 es TypeError en Python 3). Ahora los tres leen
-               `*_estado[0]`, que ya vale 'excelente', 'malo' o 'neutral'. #}
-            <div class="card {{ analisis.margen_estado[0] }}">
-                <h3>Margen %</h3>
-                <div class="value">{% if analisis.margen_ganancia is none %}—{% else %}{{ "%.1f"|format(analisis.margen_ganancia) }}%{% endif %}</div>
-                <div class="status">{{ analisis.margen_estado[1] }}</div>
-            </div>
+        {# FASE-EVA-S5: aca vivia la segunda fila de cards -- Margen %, ROI %
+           y EVA -- y se saco entera.
 
-            <div class="card {{ analisis.roi_estado[0] }}">
-                <h3>ROI %</h3>
-                <div class="value">{% if analisis.roi is none %}—{% else %}{{ "%.1f"|format(analisis.roi) }}%{% endif %}</div>
-                <div class="status">{{ analisis.roi_estado[1] }}</div>
-            </div>
+           Los tres comparaban los GASTOS historicos contra las VENTAS
+           historicas. La mayor parte de esos gastos es mercaderia comprada
+           que todavia esta en el deposito sin vender: restarla de lo vendido
+           no da un margen, da el flujo de caja con nombre de rentabilidad. En
+           Korvo eso pintaba -1054% de margen y -97% de ROI sobre un negocio
+           que factura y tiene stock.
 
-            <div class="card {{ analisis.eva_estado[0] }}">
-                <h3>EVA - Valor Económico Agregado</h3>
-                <div class="value">{% if analisis.eva is none %}—{% else %}${{ "%.0f"|format(analisis.eva) }}{% endif %}</div>
-                <div class="eva-status" style="margin-top: 5px;">{{ analisis.eva_estado[1] }}</div>
-                {# FASE-EVA-S3: sobre que periodo se prorrateo el costo de
-                   capital. La tasa que se carga en Configuracion es ANUAL y
-                   aca se cobra la fraccion que corresponde a los dias que la
-                   empresa lleva operando -- sin esta linea el EVA vuelve a ser
-                   un numero del que nadie puede reconstruir la cuenta. Solo se
-                   muestra cuando hay un EVA que explicar. #}
-                {% if analisis.eva is not none and analisis.periodo_conocido %}
-                    <div class="eva-periodo">
-                        Costo de capital calculado sobre {{ analisis.dias_transcurridos }}
-                        {{ 'día' if analisis.dias_transcurridos == 1 else 'días' }} de operación
-                        (${{ "%.0f"|format(analisis.costo_capital) }})
-                    </div>
-                {% endif %}
-            </div>
-        </div>
-        
+           El margen de verdad ya existe y esta bien calculado en
+           /reportes/margen ("Margen y Ganancia" en el menu): ese descuenta el
+           costo de lo efectivamente VENDIDO, no el de lo comprado, y ademas
+           lo abre por producto y por canal.
+
+           Queda la fila de arriba -- Ingresos por Ventas, Gastos Totales y
+           Ganancia Neta -- que si dice algo cierto: cuanta plata entro y
+           cuanta salio. No son rentabilidad y no se presentan como tal.
+
+           El calculo NO se borro: `generar_analisis_completo` sigue
+           devolviendo margen/roi/eva y el prorrateo de S3 sigue en su lugar
+           (ver eva_utils.py). Lo que se saco es la pantalla que los mostraba.
+        #}
+
         <!-- GRÁFICOS -->
         <div class="content-container">
             <div class="seccion">
