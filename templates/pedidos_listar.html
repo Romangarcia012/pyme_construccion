@@ -207,6 +207,20 @@
         /* Los dos botones de guardado, uno al lado del otro. Cada uno manda su
            propio formulario: guardar comisiones no toca las cuentas y al
            reves. Van en la misma linea porque son la misma tabla. */
+        /* FASE-VENTAS-EDITAR-S1. Discreto a proposito: editar una venta ya
+           cargada es la excepcion, no la accion principal de esta pantalla. */
+        .btn-editar {
+            color: #4dabf7;
+            text-decoration: none;
+            font-size: 13px;
+            border: 1px solid #2a4a63;
+            border-radius: 4px;
+            padding: 4px 10px;
+            display: inline-block;
+            white-space: nowrap;
+        }
+        .btn-editar:hover { background: #17293a; color: #74c0fc; }
+
         .barra-guardado { display: flex; flex-wrap: wrap; align-items: center; }
 
         .aclaracion {
@@ -269,6 +283,7 @@
                             <th class="num">Regalo</th>
                             <th class="corte">Estado</th>
                             <th>Despacho</th>
+                            <th class="num"></th>
                         </tr>
                     </thead>
                     <tbody>
@@ -347,6 +362,21 @@
                             <td>
                                 <span class="despacho despacho-{{ fila.despacho }}">{{ fila.despacho_etiqueta }}</span>
                             </td>
+                            <td class="num">
+                                {# FASE-VENTAS-EDITAR-S1. Solo en las filas manuales:
+                                   un pedido de Tiendanube o Mercado Libre lo reescribe
+                                   el sync en cada corrida, asi que editarlo aca seria
+                                   escribir algo que se borra solo. Es un <a> y no un
+                                   <button> a proposito: la tabla ya esta adentro del
+                                   formulario de comisiones y un boton mandaria ese. #}
+                                {% if fila.es_manual %}
+                                    <a class="btn-editar"
+                                       href="{{ url_for('ventas.editar_venta_manual', pedido_id=fila.id) }}"
+                                       title="Corregir esta venta manual">Editar</a>
+                                {% else %}
+                                    <span class="apagado">&mdash;</span>
+                                {% endif %}
+                            </td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -382,6 +412,16 @@
             así que refleja lo último que trajo el sync. <strong>Mostrador</strong> es la
             venta presencial: se entrega en el acto y no tiene despacho que seguir.
             El guion es un pedido que llegó sin información de envío.
+        </p>
+
+        <p class="aclaracion">
+            <strong>Editar</strong> aparece sólo en las ventas manuales, y ahí sí se puede
+            corregir todo: la fecha, el medio, el producto, la cantidad y el precio.
+            Cambiar una cantidad <strong>ajusta el stock por la diferencia</strong> —bajar de
+            3 a 1 devuelve 2 unidades—, no vuelve a descontar la venta entera. Los pedidos
+            de Tiendanube y Mercado Libre no se editan desde acá a propósito: el sync los
+            reescribe en cada corrida, así que cualquier corrección hecha acá se borraría
+            sola. Esos se corrigen en el canal.
         </p>
 
         <p class="aclaracion">

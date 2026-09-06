@@ -50,6 +50,7 @@ from models import (
     DESPACHO_SIN_DATO,
     CanalVenta,
     CuentaCobro,
+    Devolucion,
     Pago,
     Pedido,
     PedidoItem,
@@ -587,6 +588,10 @@ def listar_pedidos():
             # siendo un regalo (un canje, una reposicion sin cargo), y
             # esconder el checkbox ahi obligaria a volver a la consola.
             'es_regalo': pedido.es_regalo,
+            # FASE-VENTAS-EDITAR-S1. Lo que decide si la fila muestra el boton
+            # de editar. Las dos condiciones a la vez, igual que la ruta: la
+            # plantilla no puede ofrecer un boton que despues rebota.
+            'es_manual': tipo == TIPO_MANUAL and pedido.id_externo is None,
         })
 
     # Cuantas ventas estan esperando salir. Es lo unico que se cuenta arriba
@@ -925,4 +930,421 @@ def guardar_regalos():
               % (len(cambios), '' if len(cambios) == 1 else 's'), 'success')
     else:
         flash('No hubo cambios que guardar.', 'warning')
+    return redirect(url_for('ventas.listar_pedidos'))
+
+
+# --------------------------------------------------------------------------
+# FASE-VENTAS-EDITAR-S1: corregir una venta manual ya cargada
+# --------------------------------------------------------------------------
+# Hasta esta slice, de una venta ya guardada se podian corregir tres cosas
+# desde el listado -- la comision, la cuenta y la marca de regalo -- y ninguna
+# de las cuatro que de verdad se tipean mal: la fecha, el medio, el producto y
+# el monto. Una venta cargada con el precio equivocado no tenia arreglo dentro
+# de la app.
+#
+# SOLO LA VENTA MANUAL, Y NO ES UNA LIMITACION TEMPORAL
+#
+# Un pedido de Tiendanube o Mercado Libre lo reescribe el sync en cada corrida
+# (`sync_tiendanube._upsert_pedido` pisa cabecera e items): editarlo aca seria
+# escribir algo que la proxima sincronizacion borra sin avisar. La fuente de
+# verdad de esos pedidos es el canal, y se corrigen alla.
+#
+# COMO SE RECONOCE UNA VENTA MANUAL
+#
+# Por las dos cosas a la vez: `canal.tipo == 'manual'` y `id_externo IS NULL`.
+# Con una sola alcanzaria -- el unico escritor de pedidos ademas de este modulo
+# es el sync, que revienta con ErrorIngesta si el payload viene sin id, asi que
+# hoy NULL implica manual -- pero el dia que se sume un canal que no traiga id
+# propio, la doble condicion es lo que impide que sus pedidos caigan aca por
+# accidente.
+#
+# EL STOCK SE AJUSTA POR LA DIFERENCIA
+#
+# El alta descuenta lo vendido una vez. Editar no puede volver a descontar lo
+# mismo: lo que se aplica es el NETO entre lo que las lineas viejas se habian
+# llevado y lo que se llevan las nuevas. Bajar de 3 a 1 devuelve 2 unidades,
+# subir de 1 a 3 descuenta 2, y cambiar el producto de una linea devuelve al
+# viejo y descuenta del nuevo.
+#
+# LO QUE NO SE TOCA
+#
+# `costo_unitario_snapshot` de una linea que sobrevive a la edicion: es el
+# costo del dia de la venta y no el de hoy, porque la venta no se hizo de
+# nuevo. Una linea AGREGADA hoy si nace con el costo de hoy, que es lo mismo
+# que hace el alta -- no hay ningun snapshot anterior que respetarle.
+
+
+def _lineas_del_pedido(pedido):
+    """Los items guardados -> las filas que dibuja el formulario.
+
+    El sku sale del producto y no de `sku_externo` porque el <datalist> del
+    formulario ofrece los del catalogo: una linea cuyo producto se renombro
+    tiene que volver a aparecer elegida, no vacia.
+    """
+    lineas = []
+    for item in pedido.items:
+        producto = item.producto
+        lineas.append({
+            'sku': producto.sku if producto is not None else (item.sku_externo or ''),
+            'cantidad': item.cantidad,
+            'precio_unitario': item.precio_unitario,
+        })
+    return lineas
+
+
+def _lineas_enviadas(form):
+    """Lo que vino en el POST, crudo, para redibujar el formulario tras un error.
+
+    Sin validar a proposito: es justamente lo que NO paso la validacion lo que
+    hay que devolverle a quien lo escribio. Si el POST no trajo ninguna fila
+    (formulario roto), se devuelve una vacia para que la tabla no quede sin
+    ninguna y sin forma de cargar.
+    """
+    skus = form.getlist('sku')
+    cantidades = form.getlist('cantidad')
+    precios = form.getlist('precio_unitario')
+
+    lineas = []
+    for indice, sku in enumerate(skus):
+        lineas.append({
+            'sku': (sku or '').strip(),
+            'cantidad': cantidades[indice] if indice < len(cantidades) else '',
+            'precio_unitario': precios[indice] if indice < len(precios) else '',
+        })
+    return lineas or [{'sku': '', 'cantidad': '1', 'precio_unitario': ''}]
+
+
+def _pedido_manual_editable(pedido_id):
+    """El pedido de la URL, o un error que explica por que no se puede editar.
+
+    Filtrar por `empresa_id` -- y no solo por id -- es lo unico que impide que
+    cambiando el numero de la URL alguien edite el pedido de otra empresa.
+    """
+    pedido = (Pedido.query
+              .options(joinedload(Pedido.items).joinedload(PedidoItem.producto),
+                       joinedload(Pedido.canal),
+                       joinedload(Pedido.pagos))
+              .filter_by(id=pedido_id, empresa_id=current_user.empresa_id)
+              .first())
+    if pedido is None:
+        raise DatosInvalidos('Ese pedido no existe o no es de tu empresa.')
+
+    canal = pedido.canal
+    if canal is None or canal.tipo != TIPO_MANUAL or pedido.id_externo is not None:
+        raise DatosInvalidos(
+            'Ese pedido no es una venta manual: entro por %s y ahi se corrige. '
+            'Editarlo aca lo pisaria la proxima sincronizacion.'
+            % ETIQUETA_CANAL.get(canal.tipo if canal else None,
+                                 canal.nombre if canal else 'otro canal'))
+    return pedido
+
+
+def _contexto_edicion(pedido, productos, enviado, lineas):
+    """Todo lo que la plantilla de edicion necesita, en un solo lugar.
+
+    Mismo motivo que `_contexto_formulario`: tres render_template distintos
+    dibujan este formulario (el GET, el error de datos y el error inesperado) y
+    armar el contexto en cada uno hace que el dia que se agregue un campo,
+    alguno vuelva mutilado.
+    """
+    return {
+        'pedido': pedido,
+        'productos': productos,
+        'medios': MEDIOS_COBRO,
+        'enviado': enviado,
+        'lineas': lineas,
+        'cuentas': _cuentas_de_cobro(current_user.empresa_id),
+        'cuenta_por_canal': _cuenta_por_canal_manual(),
+    }
+
+
+def _diferencia_de_stock(pedido, items):
+    """producto_id -> cuantas unidades MAS se vendieron con la edicion.
+
+    Positivo: hay que descontar esa diferencia. Negativo: hay que devolverla.
+    Cero: esa linea quedo igual y el stock no se toca (no entra al dict).
+
+    Se calcula sobre las CANTIDADES totales por producto y no linea por linea:
+    partir una linea de 3 en dos de 2 y 1 no mueve una sola unidad, y asi el
+    resultado no depende de como se hayan reacomodado las filas.
+
+    Un item viejo sin `producto_id` (una linea que nunca se pudo mapear a un
+    producto del catalogo) no aporta: nunca descontó stock de nada, asi que no
+    hay nada que devolverle.
+    """
+    saldo = {}
+    for item in pedido.items:
+        if item.producto_id is None:
+            continue
+        saldo[item.producto_id] = saldo.get(item.producto_id, 0) - item.cantidad
+    for item in items:
+        producto_id = item['producto'].id
+        saldo[producto_id] = saldo.get(producto_id, 0) + item['cantidad']
+    return {pid: delta for pid, delta in saldo.items() if delta}
+
+
+def _aplicar_diferencia_de_stock(saldo):
+    """Mueve el stock por el neto de la edicion. FASE-VENTAS-EDITAR-S1.
+
+    Mismas dos reglas que `_descontar_stock`, por el mismo motivo:
+
+    - `stock` NULL es "nadie lleva la cuenta de este producto". No se toca ni
+      para descontar ni para devolver: inventarle un numero al editar seria
+      empezar a llevar una cuenta a partir de un dato que no existe.
+    - Un resultado negativo se guarda como 0 y se avisa. La mercaderia ya
+      salio; un stock negativo no describiria nada real.
+
+    LO QUE ESTE AJUSTE NO PUEDE DESHACER, Y HAY QUE SABERLO
+
+    Si la venta original sobrevendio -- se cargaron 5 con 3 en stock y el stock
+    quedo en 0 en vez de en -2 --, bajar despues esa venta a 1 devuelve las 4
+    unidades sobre ese 0 y deja 4, no 2. La informacion se perdio en el recorte
+    del alta, no aca, y no hay forma de recuperarla desde la base. Por eso el
+    aviso de sobreventa dice "revisá el conteo real": ese conteo es el que
+    manda, no este numero.
+
+    Devuelve (sobrevendidos, producto_ids), igual que `_descontar_stock`.
+    """
+    sobrevendidos = []
+    producto_ids = []
+
+    for producto_id, delta in saldo.items():
+        producto = db.session.get(Producto, producto_id)
+        if producto is None or producto.stock is None:
+            continue
+
+        restante = producto.stock - delta
+        if restante < 0:
+            restante = 0
+            if producto.nombre not in sobrevendidos:
+                sobrevendidos.append(producto.nombre)
+
+        producto.stock = restante
+        if producto.id not in producto_ids:
+            producto_ids.append(producto.id)
+
+    return sobrevendidos, producto_ids
+
+
+def _reescribir_items(pedido, items):
+    """Deja el pedido con exactamente estas lineas, reusando las que ya estaban.
+
+    POR QUE REUSAR Y NO BORRAR TODO Y VOLVER A INSERTAR
+
+    Dos motivos, y ninguno es de rendimiento:
+
+    - `costo_unitario_snapshot`. Borrar la fila destruye el costo del dia de la
+      venta; una fila nueva solo puede copiar el costo de HOY, y ahi el
+      "snapshot" deja de congelar nada. Es exactamente el agujero que
+      `sync_tiendanube._snapshots_previos` tapa del otro lado.
+    - `devolucion.pedido_item_id` es una FK a estas filas.
+
+    El apareo es POR PRODUCTO y no por posicion: si la linea 1 pasa de Martillo
+    a Destornillador y la 2 al reves, aparear por posicion le dejaria a cada una
+    el costo congelado de la otra. Dos lineas del mismo producto se aparean en
+    orden, que es lo unico que se puede decir de ellas.
+
+    Una linea AGREGADA hoy nace con el costo de hoy -- lo mismo que hace el
+    alta. No hay ningun snapshot anterior que respetarle.
+    """
+    sobrantes = list(pedido.items)
+    por_producto = {}
+    for fila in sobrantes:
+        por_producto.setdefault(fila.producto_id, []).append(fila)
+
+    for item in items:
+        producto = item['producto']
+        disponibles = por_producto.get(producto.id)
+        if disponibles:
+            fila = disponibles.pop(0)
+            sobrantes.remove(fila)
+        else:
+            fila = PedidoItem(pedido_id=pedido.id,
+                              costo_unitario_snapshot=producto.costo_unitario)
+            db.session.add(fila)
+        fila.producto_id = producto.id
+        fila.sku_externo = producto.sku
+        fila.descripcion = producto.nombre
+        fila.cantidad = item['cantidad']
+        fila.precio_unitario = item['precio_unitario']
+        fila.descuento_unitario = Decimal('0.00')
+        fila.subtotal = item['subtotal']
+
+    # Las que sobraron se van, salvo que alguien haya cargado una devolucion
+    # contra ellas: esa devolucion dice cuantas unidades volvieron de ESA linea,
+    # y sin la linea el dato queda colgado (ademas de romper la FK). Se avisa en
+    # vez de borrar en cascada: quitar la linea vendida sin tocar la devolucion
+    # dejaria stock devuelto de algo que nunca se vendio.
+    for fila in sobrantes:
+        if Devolucion.query.filter_by(pedido_item_id=fila.id).count():
+            raise DatosInvalidos(
+                'No se puede quitar el item "%s": tiene una devolucion '
+                'cargada. Anula la devolucion primero.' % fila.descripcion)
+        db.session.delete(fila)
+
+
+def _reescribir_pago(pedido, medio, fecha, total):
+    """Deja el pago del pedido diciendo lo mismo que la venta editada.
+
+    Un pedido manual nace con EXACTAMENTE un pago (`_armar_venta`), asi que el
+    caso normal es actualizar ese. Si no hay ninguno -- un pedido manual tocado
+    a mano en la base -- se crea, porque un pedido sin pago no aparece en
+    ninguna conciliacion.
+
+    No se borra y se vuelve a crear por lo mismo que las lineas: `devolucion` y
+    `conciliacion` apuntan a `pago.id`.
+
+    La regla de comision/estado es la del alta, sin excepciones: al cambiar de
+    tarjeta a efectivo el pago pasa a acreditado con comision 0, y al reves
+    vuelve a pendiente con la comision en NULL -- que es "todavia no se sabe",
+    no "no hubo".
+    """
+    en_efectivo = medio in MEDIOS_SIN_COMISION
+
+    pago = next((p for p in sorted(pedido.pagos, key=lambda fila: fila.id or 0)
+                 if p.procesador == PROCESADOR_MANUAL), None)
+    if pago is None:
+        pago = Pago(pedido_id=pedido.id, canal_id=pedido.canal_id,
+                    procesador=PROCESADOR_MANUAL, id_externo=None,
+                    moneda=MONEDA_DEFECTO, impuestos=Decimal('0.00'))
+        db.session.add(pago)
+
+    pago.metodo = medio
+    pago.estado = 'acreditado' if en_efectivo else 'pendiente'
+    pago.monto_bruto = total
+    pago.comision = Decimal('0.00') if en_efectivo else None
+    pago.monto_neto = total
+    pago.fecha_pago = fecha
+    pago.fecha_acreditacion = fecha if en_efectivo else None
+
+
+@ventas_bp.route('/manual/editar/<int:pedido_id>', methods=['GET', 'POST'])
+@login_required
+def editar_venta_manual(pedido_id):
+    """Corrige una venta de mostrador ya cargada.
+
+    Es el alta con dos diferencias: el pedido ya existe (asi que se actualiza en
+    vez de insertarse) y el stock se mueve por la DIFERENCIA en vez de
+    descontarse entero.
+
+    Incluye la cuenta y la comision, que ya eran editables desde el listado. No
+    es una segunda implementacion: son las mismas dos lecturas
+    (`_leer_cuenta_override`, `_leer_comision`) sobre las mismas dos columnas.
+    Lo que cambia es de donde se llega -- corregir el monto y la cuenta de la
+    misma venta en un solo formulario, en vez de en dos pantallas.
+
+    La auditoria no necesita nada aca: el hook de `before_flush` ya mira
+    `Pedido` y deja una fila por campo cambiado, con el valor viejo y el nuevo.
+    """
+    try:
+        pedido = _pedido_manual_editable(pedido_id)
+    except DatosInvalidos as error:
+        flash(str(error), 'error')
+        return redirect(url_for('ventas.listar_pedidos'))
+
+    productos = _productos_de_la_empresa()
+
+    if request.method == 'GET':
+        pago = next((p for p in pedido.pagos if p.procesador == PROCESADOR_MANUAL),
+                    None)
+        enviado = {
+            'fecha': (pedido.fecha_pedido.date().isoformat()
+                      if pedido.fecha_pedido else ''),
+            'medio': pago.metodo if pago is not None else '',
+            'nota': pedido.nota or '',
+            'cuenta': (str(pedido.cuenta_cobro_override_id)
+                       if pedido.cuenta_cobro_override_id else ''),
+            # Vacio si es NULL: el input tiene que quedar VACIO y no mostrar un
+            # 0 inventado, igual que en el listado.
+            'comision': ('' if pedido.comision_plataforma is None
+                         else str(pedido.comision_plataforma)),
+            'regalo': bool(pedido.es_regalo),
+        }
+        return render_template('venta_manual_editar.html',
+                               **_contexto_edicion(pedido, productos, enviado,
+                                                   _lineas_del_pedido(pedido)))
+
+    enviado = {
+        'fecha': (request.form.get('fecha') or '').strip(),
+        'medio': (request.form.get('medio') or '').strip(),
+        'nota': (request.form.get('nota') or '').strip(),
+        'cuenta': (request.form.get('cuenta_cobro_override') or '').strip(),
+        'comision': (request.form.get('comision_plataforma') or '').strip(),
+        'regalo': bool(request.form.get('es_regalo')),
+    }
+    lineas = _lineas_enviadas(request.form)
+
+    try:
+        fecha = _leer_fecha(enviado['fecha'])
+        medio = enviado['medio']
+        if medio not in MEDIOS_VALIDOS:
+            raise DatosInvalidos('Elegi un medio de cobro.')
+
+        cuenta_override_id = _leer_cuenta_override(
+            enviado['cuenta'], _etiqueta_pedido(pedido),
+            {cuenta.id for cuenta in _cuentas_de_cobro(current_user.empresa_id)})
+        comision = _leer_comision(enviado['comision'], _etiqueta_pedido(pedido))
+
+        items = _leer_items(request.form, {p.sku: p for p in productos})
+
+        # El saldo se calcula ANTES de reescribir las lineas: despues, las
+        # cantidades viejas ya no existen en ningun lado.
+        saldo = _diferencia_de_stock(pedido, items)
+
+        total = sum((item['subtotal'] for item in items), Decimal('0.00'))
+        _reescribir_items(pedido, items)
+
+        pedido.fecha_pedido = fecha
+        pedido.total_bruto = total
+        pedido.total = total
+        pedido.cuenta_cobro_override_id = cuenta_override_id
+        pedido.comision_plataforma = comision
+        pedido.es_regalo = enviado['regalo']
+        pedido.nota = enviado['nota'] or None
+
+        _reescribir_pago(pedido, medio, fecha, total)
+        sobrevendidos, producto_ids = _aplicar_diferencia_de_stock(saldo)
+
+        db.session.commit()
+        total_guardado = pedido.total
+    except (DatosInvalidos, CuentaInvalida, ComisionInvalida) as error:
+        # Las tres son lo mismo para quien esta corrigiendo: el formulario
+        # vuelve con lo que habia escrito y el motivo arriba.
+        db.session.rollback()
+        flash(str(error), 'error')
+        return render_template('venta_manual_editar.html',
+                               **_contexto_edicion(pedido, productos, enviado,
+                                                   lineas))
+    except Exception:  # noqa: BLE001
+        # Nada a medias: la venta queda como estaba, con su stock como estaba.
+        db.session.rollback()
+        flash('No se pudo guardar la venta. Revisa los datos e intenta de nuevo.',
+              'error')
+        return render_template('venta_manual_editar.html',
+                               **_contexto_edicion(pedido, productos, enviado,
+                                                   lineas))
+
+    flash('Venta actualizada: %s %s.' % (MONEDA_DEFECTO, total_guardado), 'success')
+
+    # Todo lo que sigue pasa DESPUES del commit y a proposito: la correccion ya
+    # esta guardada y ninguno de estos avisos la puede deshacer.
+    if sobrevendidos:
+        flash('La correccion dejo vendido mas de lo que figuraba en stock para: '
+              '%s. El stock quedo en 0; revisa el conteo real.'
+              % ', '.join(sobrevendidos), 'warning')
+
+    try:
+        fallidos = stock_tiendanube.empujar_stock(current_user.empresa_id,
+                                                  producto_ids)
+    except Exception:  # noqa: BLE001
+        # El rollback va primero, igual que en el alta: si lo que se rompio
+        # dejo la sesion sucia, leer los nombres para el aviso volveria a
+        # fallar. La correccion ya esta commiteada.
+        db.session.rollback()
+        fallidos = [p.nombre for p in productos if p.id in producto_ids]
+
+    if fallidos:
+        flash('Venta corregida, pero no se pudo actualizar el stock en Tiendanube '
+              'para: %s - revisalo a mano.' % ', '.join(fallidos), 'warning')
+
     return redirect(url_for('ventas.listar_pedidos'))

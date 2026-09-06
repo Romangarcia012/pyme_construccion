@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Editar venta manual</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container { max-width: 1000px; margin: 0 auto; }
+
+        .header { margin-bottom: 30px; }
+        h1 { color: #fff; font-size: 28px; }
+        .subtitulo { color: #888; font-size: 14px; margin-top: 6px; }
+
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn-volver:hover { background: #555; }
+
+        .panel {
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .panel h2 {
+            font-size: 16px;
+            color: #fff;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+
+        label {
+            display: block;
+            font-size: 13px;
+            color: #aaa;
+            margin-bottom: 6px;
+        }
+
+        input[type="text"], input[type="date"], input[type="number"], select, textarea {
+            width: 100%;
+            background: #111;
+            border: 1px solid #333;
+            border-radius: 4px;
+            color: #e0e0e0;
+            padding: 10px;
+            font-size: 14px;
+            font-family: inherit;
+        }
+
+        input:focus, select:focus, textarea:focus {
+            outline: none;
+            border-color: #0d6efd;
+        }
+
+        .campos {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+        .campo { flex: 1 1 200px; }
+
+        table { width: 100%; border-collapse: collapse; }
+
+        th {
+            background: #252525;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            color: #fff;
+            font-size: 13px;
+            border-bottom: 1px solid #333;
+        }
+
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #2a2a2a;
+            vertical-align: middle;
+        }
+
+        .col-producto { width: 55%; }
+        .col-cantidad { width: 15%; }
+        .col-precio   { width: 22%; }
+        .col-quitar   { width: 8%; text-align: right; }
+
+        .ayuda { color: #777; font-size: 12px; margin-top: 8px; }
+
+        /* FASE-VENTAS-EDITAR-S1. La chapa de identidad de la venta que se está
+           corrigiendo. Va arriba de todo y no como un dato más adentro de un
+           panel: en una pantalla que sobrescribe algo ya guardado, lo primero
+           que hay que poder verificar es que es la venta que se quería tocar. */
+        .identidad {
+            background: #141414;
+            border: 1px solid #2a2a2a;
+            border-left: 3px solid #8a6d3b;
+            border-radius: 4px;
+            padding: 14px;
+            margin-bottom: 20px;
+            font-size: 13px;
+            color: #c9bfa8;
+        }
+        .identidad strong { color: #e8dcc0; }
+        .identidad .dato { display: inline-block; margin-right: 22px; }
+
+        /* Mismos dos bloques que el alta, con los mismos colores y por las
+           mismas razones: azul = a quién se le cuenta la plata, verde = si hay
+           plata. Cambiarlos acá haría que la misma pregunta se lea distinta
+           según por qué puerta se entró. */
+        .bloque-cuenta {
+            margin-top: 18px;
+            padding: 14px;
+            background: #141414;
+            border: 1px solid #2a2a2a;
+            border-left: 3px solid #2d6ea3;
+            border-radius: 4px;
+        }
+        .bloque-cuenta label { color: #cbd8e3; font-size: 13px; }
+        .bloque-cuenta select { max-width: 340px; }
+
+        .bloque-regalo {
+            margin-top: 18px;
+            padding: 14px;
+            background: #141414;
+            border: 1px solid #2a2a2a;
+            border-left: 3px solid #3d7a4a;
+            border-radius: 4px;
+        }
+        .bloque-regalo .fila {
+            display: flex;
+            align-items: center;
+            gap: 9px;
+        }
+        .bloque-regalo label { color: #cbe3d2; font-size: 13px; cursor: pointer; }
+        .bloque-regalo input[type="checkbox"] {
+            width: 16px;
+            height: 16px;
+            accent-color: #3d7a4a;
+            cursor: pointer;
+        }
+
+        .btn-secundario {
+            background: #2a2a2a;
+            color: #e0e0e0;
+            border: 1px solid #383838;
+            padding: 8px 14px;
+            border-radius: 4px;
+            font-size: 13px;
+            font-family: inherit;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        .btn-secundario:hover { background: #333; }
+
+        .btn-quitar {
+            background: transparent;
+            color: #777;
+            border: 1px solid #333;
+            border-radius: 4px;
+            width: 28px;
+            height: 28px;
+            font-size: 15px;
+            line-height: 1;
+            cursor: pointer;
+        }
+        .btn-quitar:hover { color: #ff6b6b; border-color: #5a2a2a; }
+
+        .barra-guardado {
+            display: flex;
+            align-items: center;
+            gap: 14px;
+        }
+
+        .btn-guardar {
+            background: #28a745;
+            color: #fff;
+            border: none;
+            padding: 12px 22px;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        .btn-guardar:hover { background: #20c997; }
+
+        .btn-cancelar {
+            color: #888;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .btn-cancelar:hover { color: #ccc; }
+
+        @media (max-width: 768px) {
+            th, td { padding: 8px; }
+            .col-producto, .col-cantidad, .col-precio, .col-quitar { width: auto; }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('ventas.listar_pedidos') }}" class="btn-volver">← Volver a Ventas</a>
+
+        <div class="header">
+            <h1>Editar venta manual</h1>
+            <p class="subtitulo">Corregir una venta de mostrador que ya está cargada</p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div style="padding: 15px; margin-bottom: 20px; border-radius: 6px; border-left: 4px solid {% if category == 'success' %}#28a745{% elif category == 'warning' %}#e0a800{% else %}#dc3545{% endif %}; background: {% if category == 'success' %}rgba(40, 167, 69, 0.1){% elif category == 'warning' %}rgba(224, 168, 0, 0.1){% else %}rgba(220, 53, 69, 0.1){% endif %}; color: {% if category == 'success' %}#51cf66{% elif category == 'warning' %}#ffd43b{% else %}#ff6b6b{% endif %};">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {# El total y la fecha son los de la venta GUARDADA, no los del
+           formulario: son con lo que se verifica que es la venta correcta, y
+           si siguieran a los inputs dejarían de servir para eso. #}
+        <div class="identidad">
+            <span class="dato">Venta <strong>#{{ pedido.id }}</strong></span>
+            <span class="dato">Cargada el <strong>{{ pedido.fecha_pedido.strftime('%d/%m/%Y') if pedido.fecha_pedido else '—' }}</strong></span>
+            <span class="dato">Total actual <strong>{{ pedido.moneda }} {{ '%.2f'|format(pedido.total) }}</strong></span>
+        </div>
+
+        <form method="POST">
+            <datalist id="catalogo">
+                {% for producto in productos %}
+                    <option value="{{ producto.sku }}">{{ producto.nombre }}</option>
+                {% endfor %}
+            </datalist>
+
+            <div class="panel">
+                <h2>Ítems</h2>
+                <table>
+                    <thead>
+                        <tr>
+                            <th class="col-producto">Producto (código)</th>
+                            <th class="col-cantidad">Cantidad</th>
+                            <th class="col-precio">Precio unitario</th>
+                            <th class="col-quitar"></th>
+                        </tr>
+                    </thead>
+                    <tbody id="items">
+                        {% for linea in lineas %}
+                        <tr class="fila-item">
+                            <td><input type="text" name="sku" list="catalogo" placeholder="Escribí el código o el nombre" autocomplete="off" value="{{ linea.sku }}"></td>
+                            <td><input type="number" name="cantidad" min="1" step="1" value="{{ linea.cantidad }}"></td>
+                            <td><input type="text" name="precio_unitario" inputmode="decimal" placeholder="0.00" value="{{ linea.precio_unitario }}"></td>
+                            <td class="col-quitar"><button type="button" class="btn-quitar" onclick="quitarFila(this)" title="Quitar ítem">×</button></td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <p class="ayuda">Cambiar la cantidad o el producto <strong>ajusta el stock por la
+                   diferencia</strong>: bajar de 3 a 1 devuelve 2 unidades al depósito, subir de 1 a
+                   3 descuenta 2 más. No se vuelve a descontar la venta entera.</p>
+                <p style="margin-top: 12px;">
+                    <button type="button" class="btn-secundario" onclick="agregarFila()">+ Agregar ítem</button>
+                </p>
+            </div>
+
+            <div class="panel">
+                <h2>Datos de la venta</h2>
+                <div class="campos">
+                    <div class="campo">
+                        <label for="fecha">Fecha</label>
+                        <input type="date" id="fecha" name="fecha" value="{{ enviado.fecha }}">
+                    </div>
+                    <div class="campo">
+                        <label for="medio">Medio de cobro</label>
+                        <select id="medio" name="medio">
+                            <option value="">Elegí uno...</option>
+                            {% for clave, etiqueta in medios %}
+                                <option value="{{ clave }}" {% if enviado.medio == clave %}selected{% endif %}>{{ etiqueta }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    {# La comisión ya era editable en tanda desde /pedidos/listar y
+                       sigue estándolo: es el mismo campo y la misma lectura. Acá
+                       aparece para poder corregir el monto y la comisión de la
+                       misma venta sin pasar por dos pantallas. #}
+                    <div class="campo">
+                        <label for="comision_plataforma">Comisión de plataforma</label>
+                        <input type="text" id="comision_plataforma" name="comision_plataforma"
+                               inputmode="decimal" placeholder="—"
+                               value="{{ enviado.comision }}">
+                    </div>
+                </div>
+                <p class="ayuda">Vacío no es cero: significa «todavía no la sé». Una venta de
+                   mostrador no paga comisión de ningún canal, así que lo normal acá es 0.</p>
+
+                {% if cuentas %}
+                <div class="bloque-cuenta">
+                    <label for="cuenta_cobro_override">¿A qué cuenta entra esta venta?</label>
+                    <select id="cuenta_cobro_override" name="cuenta_cobro_override">
+                        <option value="">Por canal{% if cuenta_por_canal %} ({{ cuenta_por_canal }}){% endif %}</option>
+                        {% for cuenta in cuentas %}
+                            <option value="{{ cuenta.id }}" {% if enviado.cuenta == cuenta.id|string %}selected{% endif %}>{{ cuenta.etiqueta_socio }}</option>
+                        {% endfor %}
+                    </select>
+                    <p class="ayuda">Es el mismo selector que el del listado de ventas: el medio es
+                       <em>cómo</em> pagó el cliente, esto es <em>a quién</em> se le cuenta la plata
+                       en la caja por socio.</p>
+                </div>
+                {% endif %}
+
+                <div class="bloque-regalo">
+                    <div class="fila">
+                        <input type="checkbox" id="es_regalo" name="es_regalo" value="1"
+                               {% if enviado.regalo %}checked{% endif %}>
+                        <label for="es_regalo">Esto es un regalo, no una venta</label>
+                    </div>
+                    <p class="ayuda">Un sorteo, un canje, una muestra sin cargo. El stock se
+                       descuenta igual —la mercadería sale del depósito— pero no cuenta como
+                       facturación de nadie en la caja por socio.</p>
+                </div>
+
+                <div style="margin-top: 15px;">
+                    <label for="nota">Nota (opcional)</label>
+                    <textarea id="nota" name="nota" rows="2" placeholder="Cliente: Juan Pérez">{{ enviado.nota or '' }}</textarea>
+                </div>
+            </div>
+
+            <div class="barra-guardado">
+                <button type="submit" class="btn-guardar">Guardar cambios</button>
+                <a href="{{ url_for('ventas.listar_pedidos') }}" class="btn-cancelar">Cancelar</a>
+            </div>
+        </form>
+    </div>
+
+    <script>
+        // Mismo par de funciones que el alta. La fila que se clona es la
+        // PRIMERA y se le vacían los campos: clonar la última copiaría lo que
+        // ya está cargado y quien agregue un ítem terminaría duplicando uno
+        // sin darse cuenta.
+        function agregarFila() {
+            var cuerpo = document.getElementById('items');
+            var nueva = cuerpo.querySelector('.fila-item').cloneNode(true);
+            nueva.querySelectorAll('input').forEach(function (campo) {
+                campo.value = campo.name === 'cantidad' ? '1' : '';
+            });
+            cuerpo.appendChild(nueva);
+        }
+
+        // Nunca se borra la ultima fila: una venta sin items no se puede
+        // guardar, y dejar la tabla vacia no deja forma de volver a cargar uno
+        // sin recargar la pagina.
+        function quitarFila(boton) {
+            var cuerpo = document.getElementById('items');
+            if (cuerpo.querySelectorAll('.fila-item').length > 1) {
+                boton.closest('.fila-item').remove();
+            }
+        }
+    </script>
+</body>
+</html>
