@@ -113,6 +113,20 @@
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
         }
         
+        /* FASE-GASTO-MIXTO-S1: una fila por cuenta, nombre + monto. */
+        .parte-mixta {
+            display: grid;
+            grid-template-columns: 1fr 160px;
+            gap: 10px;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .parte-mixta span {
+            color: #e0e0e0;
+            font-size: 14px;
+        }
+        #mixto-resumen.cierra { color: #28a745; }
+        #mixto-resumen.no-cierra { color: #dc3545; }
         .help-text {
             font-size: 12px;
             color: #888;
@@ -149,6 +163,14 @@
                 Cargado el {{ gasto.fecha_creacion.strftime('%d/%m/%Y') if gasto.fecha_creacion else '-' }}
             </div>
             
+            {% if get_flashed_messages() %}
+                {% for message in get_flashed_messages() %}
+                    <div style="background: rgba(220, 53, 69, 0.1); border-left: 4px solid #dc3545; padding: 15px; border-radius: 6px; margin-bottom: 20px; color: #dc3545; font-size: 13px;">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+
             <form method="POST">
                 <div class="form-group">
                     <label for="descripcion">Descripción</label>
@@ -193,6 +215,7 @@
                     <p class="help-text">
                         Facturación = salió de la plata que entra por las ventas.
                         Capital = salió del aporte de los socios.
+                        Mixto = un solo pago que salió de más de una cuenta.
                     </p>
                 </div>
 
@@ -206,6 +229,29 @@
                     </select>
                 </div>
 
+                <!-- FASE-GASTO-MIXTO-S1: el reparto, una entrada por cuenta.
+                     Se oculta igual que el selector de cuenta y por el mismo
+                     motivo: el navegador manda lo que haya en el DOM, asi que
+                     la ruta solo lo mira cuando el origen es Mixto. -->
+                <div class="form-group" id="grupo-mixto">
+                    <label>¿Cuánto salió de cada cuenta?</label>
+                    {% for cuenta in cuentas %}
+                        <div class="parte-mixta">
+                            <span>{{ cuenta.etiqueta_socio }}</span>
+                            <input type="number" step="0.01" min="0"
+                                   class="parte-mixta-monto"
+                                   name="parte_{{ cuenta.id }}"
+                                   value="{{ partes_mixto.get(cuenta.id, '') }}"
+                                   placeholder="0.00" autocomplete="off">
+                        </div>
+                    {% endfor %}
+                    <p class="help-text" id="mixto-resumen"></p>
+                    <p class="help-text">
+                        Poné 0 en la cuenta que no puso nada. Las partes tienen
+                        que sumar exactamente el monto del gasto.
+                    </p>
+                </div>
+
                 <div class="botones">
                     <button type="submit" class="btn-guardar">Guardar Gasto</button>
                     <button type="button" class="btn-cancelar" onclick="window.location.href='{{ url_for('dashboard') }}'">Cancelar</button>
@@ -216,16 +262,69 @@
 
     <script>
         // Muestra el selector de cuenta solo cuando el gasto salio de la
-        // facturacion. Es comodidad, no validacion: quien mande el formulario
-        // a mano igual choca contra la ruta y contra el CHECK de la base.
+        // facturacion, y el reparto solo cuando salio de varias. Es
+        // comodidad, no validacion: quien mande el formulario a mano igual
+        // choca contra la ruta y contra el CHECK de la base.
+        //
+        // FASE-GASTO-MIXTO-S1: el total en vivo es para que se vea si el
+        // reparto cierra ANTES de mandar, no para decidir si cierra -- eso lo
+        // decide la ruta, en Decimal. Aca se cuenta en centavos enteros
+        // justamente para no arrastrar el redondeo de los float de JS.
         (function () {
             var origen = document.getElementById('origen_fondo');
-            var grupo = document.getElementById('grupo-cuenta');
-            function refrescar() {
-                grupo.style.display =
-                    origen.value === '{{ origen_facturacion }}' ? '' : 'none';
+            var grupoCuenta = document.getElementById('grupo-cuenta');
+            var grupoMixto = document.getElementById('grupo-mixto');
+            var monto = document.getElementById('monto');
+            var resumen = document.getElementById('mixto-resumen');
+            var partes = document.querySelectorAll('.parte-mixta-monto');
+
+            function centavos(texto) {
+                var n = parseFloat(texto);
+                return isNaN(n) ? 0 : Math.round(n * 100);
             }
+
+            function pesos(c) {
+                return '$' + (c / 100).toFixed(2);
+            }
+
+            function contar() {
+                var suma = 0;
+                for (var i = 0; i < partes.length; i++) {
+                    suma += centavos(partes[i].value);
+                }
+                var total = centavos(monto.value);
+                var falta = total - suma;
+                resumen.className = 'help-text ' +
+                    (falta === 0 ? 'cierra' : 'no-cierra');
+                if (falta === 0) {
+                    resumen.textContent =
+                        'Repartido: ' + pesos(suma) + ' \u2014 cierra.';
+                } else if (falta > 0) {
+                    resumen.textContent =
+                        'Repartido: ' + pesos(suma) + ' de ' + pesos(total) +
+                        ' \u2014 faltan ' + pesos(falta) + '.';
+                } else {
+                    resumen.textContent =
+                        'Repartido: ' + pesos(suma) + ' de ' + pesos(total) +
+                        ' \u2014 sobran ' + pesos(-falta) + '.';
+                }
+            }
+
+            function refrescar() {
+                grupoCuenta.style.display =
+                    origen.value === '{{ origen_facturacion }}' ? '' : 'none';
+                grupoMixto.style.display =
+                    origen.value === '{{ origen_mixto }}' ? '' : 'none';
+                if (origen.value === '{{ origen_mixto }}') {
+                    contar();
+                }
+            }
+
             origen.addEventListener('change', refrescar);
+            monto.addEventListener('input', contar);
+            for (var i = 0; i < partes.length; i++) {
+                partes[i].addEventListener('input', contar);
+            }
             refrescar();
         })();
     </script>

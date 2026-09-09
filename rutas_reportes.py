@@ -68,10 +68,13 @@ from sqlalchemy.orm import joinedload
 from models import (
     ORIGEN_CAPITAL,
     ORIGEN_FACTURACION,
+    # FASE-GASTO-MIXTO-S1: un gasto pagado entre varias cuentas y su reparto.
+    ORIGEN_MIXTO,
     SOCIOS,
     CanalVenta,
     CuentaCobro,
     Gasto,
+    GastoOrigenMixto,
     Ingreso,
     Pedido,
     db,
@@ -698,21 +701,70 @@ def _gastado_por_socio(empresa_id):
     El socio sale del JOIN a cuenta_cobro y no del id de la cuenta: es el
     mismo criterio que el resto de la pantalla -- de quien es una cuenta lo
     dice `cuenta_cobro.socio`, no su nombre ni su id.
+
+    FASE-GASTO-MIXTO-S1: LOS MIXTOS SE REPARTEN, NO SE IMPUTAN ENTEROS
+
+    Un gasto con origen_fondo='mixto' salio de VARIAS cuentas a la vez, y a
+    cada socio le tiene que bajar SU PARTE. El ejemplo real: $68.000 pagados
+    53.000 de la cuenta de Roman y 15.000 de la de Nachi bajan 53.000 y 15.000
+    respectivamente -- no 68.000 a uno, no 68.000 a los dos (que restaria
+    $136.000 de una caja de la que salieron $68.000), no 34.000 a cada uno
+    (que seria promediar un dato que se tiene exacto).
+
+    Por eso son dos consultas y no una: los de 'facturacion' suman
+    `gasto.monto` porque el gasto entero salio de esa cuenta, y los de 'mixto'
+    suman `gasto_origen_mixto.monto`, que es la parte. Sumar las dos cosas en
+    una sola consulta pediria un OUTER JOIN cuyo lado nulo volveria a imputar
+    el total; separarlas mantiene cada regla legible por su lado.
+
+    Una parte en CERO cuenta como gasto igual (suma $0 y +1): es un reparto
+    que se hizo y que a esa cuenta le toco nada, distinto de un gasto que
+    nunca la toco. Es la misma decision que el CHECK `monto >= 0` del modelo.
     """
-    filas = (db.session.query(CuentaCobro.socio,
-                              func.coalesce(func.sum(Gasto.monto), 0),
-                              func.count(Gasto.id))
-             .join(CuentaCobro, Gasto.cuenta_pago_id == CuentaCobro.id)
-             .filter(Gasto.empresa_id == empresa_id)
-             .filter(Gasto.origen_fondo == ORIGEN_FACTURACION)
-             .group_by(CuentaCobro.socio)
-             .all())
+    acumulado = {}
+
+    def sumar(socio, monto, cantidad):
+        antes = acumulado.get(socio, (CERO, 0))
+        acumulado[socio] = (antes[0] + Decimal(monto or 0),
+                            antes[1] + int(cantidad or 0))
+
+    # 1. Los que salieron ENTEROS de una sola cuenta (como desde S3).
+    for socio, monto, cantidad in (
+            db.session.query(CuentaCobro.socio,
+                             func.coalesce(func.sum(Gasto.monto), 0),
+                             func.count(Gasto.id))
+            .join(CuentaCobro, Gasto.cuenta_pago_id == CuentaCobro.id)
+            .filter(Gasto.empresa_id == empresa_id)
+            .filter(Gasto.origen_fondo == ORIGEN_FACTURACION)
+            .group_by(CuentaCobro.socio)
+            .all()):
+        sumar(socio, monto, cantidad)
+
+    # 2. Las PARTES de los que se pagaron entre varias cuentas.
+    #
+    # El filtro por `Gasto.origen_fondo == ORIGEN_MIXTO` no es redundante con
+    # la existencia de la fila: si un gasto dejo de ser mixto en una edicion,
+    # su reparto viejo no tiene que seguir restando. La ruta lo borra, y este
+    # filtro es la segunda red por si alguna vez no lo hiciera.
+    for socio, monto, cantidad in (
+            db.session.query(CuentaCobro.socio,
+                             func.coalesce(func.sum(GastoOrigenMixto.monto), 0),
+                             func.count(GastoOrigenMixto.id))
+            .select_from(GastoOrigenMixto)
+            .join(Gasto, GastoOrigenMixto.gasto_id == Gasto.id)
+            .join(CuentaCobro,
+                  GastoOrigenMixto.cuenta_cobro_id == CuentaCobro.id)
+            .filter(Gasto.empresa_id == empresa_id)
+            .filter(Gasto.origen_fondo == ORIGEN_MIXTO)
+            .group_by(CuentaCobro.socio)
+            .all()):
+        sumar(socio, monto, cantidad)
+
     # Una cuenta sin socio cae en la clave None, que es la misma fila donde ya
     # va la facturacion sin dueno. Los dos numeros de esa fila hablan de la
     # misma plata sin identificar, asi que se restan entre si igual que los de
     # cualquier socio.
-    return {socio: (Decimal(monto or 0), int(cantidad or 0))
-            for socio, monto, cantidad in filas}
+    return acumulado
 
 
 def _total_gastos(empresa_id, condicion):

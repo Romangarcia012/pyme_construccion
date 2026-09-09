@@ -9,7 +9,10 @@ from models import (
     ORIGENES_FONDO,
     ORIGEN_CAPITAL,
     ORIGEN_FACTURACION,
+    # FASE-GASTO-MIXTO-S1: el tercer origen y la tabla donde vive su reparto.
+    ORIGEN_MIXTO,
     CuentaCobro,
+    GastoOrigenMixto,
 )
 # `registrar_cambio` YA NO se importa de aca: la version de eva_utils usaba
 # nombres de columna que no existen y nunca fallo solo porque el `def` de
@@ -530,9 +533,57 @@ def _cuentas_de(empresa_id):
             .all())
 
 
-def _origen_del_form(form, empresa_id, requerido=False,
+def _partes_mixtas_del_form(form, cuentas, monto):
+    """FASE-GASTO-MIXTO-S1: lee el reparto -> [(cuenta_id, Decimal), ...].
+
+    Una entrada por CADA cuenta de cobro de la empresa, incluidas las que
+    pusieron 0: un cero es un dato ("de esta cuenta no salio nada en este
+    gasto"), no un campo sin llenar, y por eso vacio se rechaza y cero no.
+
+    La regla fuerte es que las partes sumen EXACTAMENTE `monto`. No la puede
+    cuidar un CHECK -- es una regla entre filas y un CHECK solo ve la fila que
+    se escribe -- asi que se cuida aca, en Decimal. En float, 53000.10 +
+    14999.90 no da 68000 y el gasto se rechazaria por un error que no cometio
+    nadie.
+    """
+    if not cuentas:
+        raise ValueError('No hay cuentas de cobro cargadas: un gasto no se '
+                         'puede dividir entre cuentas que no existen')
+
+    partes = []
+    total = Decimal('0')
+    for cuenta in cuentas:
+        crudo = (form.get('parte_%d' % cuenta.id) or '').strip()
+        if not crudo:
+            raise ValueError('Decí cuánto salió de %s (poné 0 si de esa '
+                             'cuenta no salió nada)' % cuenta.etiqueta_socio)
+        try:
+            parte = Decimal(crudo)
+        except InvalidOperation:
+            raise ValueError('Lo que salió de %s no es un número válido'
+                             % cuenta.etiqueta_socio)
+        if parte < 0:
+            raise ValueError('Lo que salió de %s no puede ser negativo'
+                             % cuenta.etiqueta_socio)
+        partes.append((cuenta.id, parte))
+        total += parte
+
+    if total != monto:
+        raise ValueError('El reparto no cierra: las partes suman $%s y el '
+                         'gasto es de $%s' % (total, monto))
+
+    return partes
+
+
+def _origen_del_form(form, empresa_id, monto=None, requerido=False,
                      por_defecto=(None, None)):
-    """FASE-CAJA-GENERAL-S3: lee "con que plata se pago" -> (origen, cuenta_id).
+    """FASE-CAJA-GENERAL-S3: lee "con que plata se pago".
+
+    Devuelve `(origen, cuenta_id, partes)`. `partes` es None salvo para el
+    origen 'mixto' (FASE-GASTO-MIXTO-S1), donde trae el reparto ya validado
+    -- y None ahi significa "no lo toques", no "borralo": es lo que devuelve
+    la edicion cuando el formulario no trajo origen y se conserva el que la
+    fila ya tenia.
 
     Levanta ValueError con el texto que se le muestra a quien carga. Es la
     unica puerta por la que el par (origen_fondo, cuenta_pago_id) entra al
@@ -557,11 +608,23 @@ def _origen_del_form(form, empresa_id, requerido=False,
 
     if origen is None:
         if requerido:
-            raise ValueError('Decí con qué plata se pagó: facturación o capital')
-        return por_defecto
+            raise ValueError('Decí con qué plata se pagó: facturación, '
+                             'capital o mixto')
+        return por_defecto[0], por_defecto[1], None
 
     if origen not in ORIGENES_FONDO:
         raise ValueError('El origen del gasto no es válido')
+
+    if origen == ORIGEN_MIXTO:
+        # La cuenta que venga se descarta por el mismo motivo que en Capital
+        # (el <select> se oculta, no se borra), y ademas porque aca no hay UNA
+        # cuenta: hay un reparto, y vive en su propia tabla.
+        if monto is None:
+            raise ValueError('Cargá el monto del gasto antes de repartirlo '
+                             'entre las cuentas')
+        partes = _partes_mixtas_del_form(
+            form, _cuentas_de(empresa_id), monto)
+        return ORIGEN_MIXTO, None, partes
 
     if origen == ORIGEN_CAPITAL:
         # La cuenta que venga se DESCARTA en silencio, no se rechaza. El
@@ -571,7 +634,7 @@ def _origen_del_form(form, empresa_id, requerido=False,
         # devolverle un error a quien carga por algo que hizo el formulario
         # solo; el dato que importa ("salio de capital") ya quedo dicho, y el
         # CHECK de la base sigue cubriendo cualquier otro camino de escritura.
-        return ORIGEN_CAPITAL, None
+        return ORIGEN_CAPITAL, None, None
 
     crudo = (form.get('cuenta_pago_id') or '').strip()
     if not crudo:
@@ -590,7 +653,7 @@ def _origen_del_form(form, empresa_id, requerido=False,
     if cuenta is None:
         raise ValueError('La cuenta de pago no es válida')
 
-    return ORIGEN_FACTURACION, cuenta.id
+    return ORIGEN_FACTURACION, cuenta.id, None
 
 
 # ======================== DASHBOARD ========================
@@ -739,8 +802,9 @@ def nuevo_gasto():
             # el saldo real de los socios mintiendo por omision desde el
             # primer dia, y completarlo despues es adivinar.
             try:
-                origen_fondo, cuenta_pago_id = _origen_del_form(
-                    request.form, current_user.empresa_id, requerido=True)
+                origen_fondo, cuenta_pago_id, partes = _origen_del_form(
+                    request.form, current_user.empresa_id, monto=monto,
+                    requerido=True)
             except ValueError as e:
                 flash(str(e), 'danger')
                 return redirect(url_for('nuevo_gasto'))
@@ -755,6 +819,14 @@ def nuevo_gasto():
                 origen_fondo=origen_fondo,
                 cuenta_pago_id=cuenta_pago_id
             )
+            # FASE-GASTO-MIXTO-S1: el reparto va por la relacion y no con un
+            # gasto_id a mano, para que el gasto y sus partes entren en el
+            # MISMO commit. Si algo falla, no queda ni un gasto mixto sin
+            # reparto ni un reparto sin gasto.
+            if partes is not None:
+                gasto.partes_mixto = [
+                    GastoOrigenMixto(cuenta_cobro_id=cuenta_id, monto=parte)
+                    for cuenta_id, parte in partes]
             db.session.add(gasto)
             db.session.commit()
 
@@ -772,6 +844,7 @@ def nuevo_gasto():
                            cuentas=_cuentas_de(current_user.empresa_id),
                            origenes=ORIGENES_FONDO,
                            origen_facturacion=ORIGEN_FACTURACION,
+                           origen_mixto=ORIGEN_MIXTO,
                            hoy=datetime.now().date().isoformat())
 
 @app.route('/gasto/editar/<int:id>', methods=['GET', 'POST'])
@@ -811,12 +884,26 @@ def editar_gasto(id):
             # que la fecha dos lineas mas arriba: un campo que no vino no
             # significa "borralo".
             try:
-                origen_fondo, cuenta_pago_id = _origen_del_form(
-                    request.form, current_user.empresa_id,
+                origen_fondo, cuenta_pago_id, partes = _origen_del_form(
+                    request.form, current_user.empresa_id, monto=monto,
                     por_defecto=(gasto.origen_fondo, gasto.cuenta_pago_id))
             except ValueError as e:
                 flash(str(e), 'danger')
                 return redirect(url_for('editar_gasto', id=id))
+
+            # Sigue siendo mixto pero el formulario no mando el reparto: se
+            # conserva el que ya tenia, y por eso hay que revisar que siga
+            # cerrando contra el monto NUEVO. Sin esto, editar solo el monto
+            # de un gasto mixto dejaria un reparto que no suma el total, que
+            # es justo lo que esta slice viene a impedir.
+            if origen_fondo == ORIGEN_MIXTO and partes is None:
+                repartido = sum((p.monto for p in gasto.partes_mixto),
+                                Decimal('0'))
+                if repartido != monto:
+                    flash('El reparto entre cuentas suma $%s y el gasto pasó '
+                          'a ser de $%s: volvé a repartirlo' % (repartido, monto),
+                          'danger')
+                    return redirect(url_for('editar_gasto', id=id))
 
             gasto.descripcion = descripcion
             gasto.monto = monto
@@ -824,6 +911,18 @@ def editar_gasto(id):
             gasto.fecha = fecha
             gasto.origen_fondo = origen_fondo
             gasto.cuenta_pago_id = cuenta_pago_id
+
+            # FASE-GASTO-MIXTO-S1: el reparto se reescribe entero, nunca se
+            # parchea fila por fila -- un reparto a medias no significa nada.
+            # Y si el gasto dejo de ser mixto, el reparto viejo SE VA: dejarlo
+            # colgado le seguiria restando plata a los socios en caja-socio
+            # por un gasto que ahora dice haber salido de otro lado.
+            if partes is not None:
+                gasto.partes_mixto = [
+                    GastoOrigenMixto(cuenta_cobro_id=cuenta_id, monto=parte)
+                    for cuenta_id, parte in partes]
+            elif origen_fondo != ORIGEN_MIXTO:
+                gasto.partes_mixto = []
 
             db.session.commit()
 
@@ -841,7 +940,10 @@ def editar_gasto(id):
                            categorias=categorias,
                            cuentas=_cuentas_de(current_user.empresa_id),
                            origenes=ORIGENES_FONDO,
-                           origen_facturacion=ORIGEN_FACTURACION)
+                           origen_facturacion=ORIGEN_FACTURACION,
+                           origen_mixto=ORIGEN_MIXTO,
+                           partes_mixto={p.cuenta_cobro_id: p.monto
+                                         for p in gasto.partes_mixto})
 
 @app.route('/gasto/eliminar/<int:id>', methods=['POST'])
 @login_required

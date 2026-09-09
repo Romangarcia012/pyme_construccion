@@ -106,16 +106,23 @@ class Categoria(db.Model):
 #   'capital'     -> salio del pool que los socios aportaron, que es plata
 #                    ajena a la facturacion. No le baja el saldo a nadie en
 #                    particular, y por eso NO lleva cuenta de cobro.
+#   'mixto'       -> FASE-GASTO-MIXTO-S1: un solo pago real que salio de MAS
+#                    DE UNA cuenta de cobro a la vez. Tampoco lleva
+#                    cuenta_pago_id -- no hay una sola cuenta que poner ahi --
+#                    y el reparto vive en `gasto_origen_mixto`, una fila por
+#                    cuenta con cuanto salio de cada una.
 #
 # El aporte que forma ese pool ya entra por el otro lado, como Ingreso con la
 # categoria "Aporte de capital (socios)" (FASE-CAJA-GENERAL-S2). Esto es la
 # salida, no la entrada, y no se toca con aquello.
 ORIGEN_FACTURACION = 'facturacion'
 ORIGEN_CAPITAL = 'capital'
+ORIGEN_MIXTO = 'mixto'
 
 ORIGENES_FONDO = OrderedDict([
     (ORIGEN_FACTURACION, 'Facturación'),
     (ORIGEN_CAPITAL, 'Capital'),
+    (ORIGEN_MIXTO, 'Mixto (dividido entre cuentas)'),
 ])
 
 # Lo que se muestra cuando la fila no lo dice. NO es un tercer origen: es la
@@ -155,6 +162,24 @@ class Gasto(db.Model):
 
     cuenta_pago = db.relationship('CuentaCobro', backref='gastos')
 
+    # FASE-GASTO-MIXTO-S1: el reparto entre cuentas cuando origen_fondo es
+    # 'mixto'. Vacio en cualquier otro caso.
+    #
+    # `cascade='all, delete-orphan'` no es decoracion: borrar un gasto tiene
+    # que llevarse su reparto. Sin eso, la FK dejaria huerfanas unas filas que
+    # no significan nada solas -- y en Postgres directamente rechazaria el
+    # DELETE del gasto, rompiendo /gasto/eliminar para los mixtos.
+    #
+    # SIN `passive_deletes`: el borrado lo hace el ORM, fila por fila, y no se
+    # delega en el ON DELETE CASCADE de la base. Es a proposito -- SQLite no
+    # aplica las FK salvo que se le pida, asi que delegarselo dejaria el
+    # reparto huerfano en los tests y limpio en produccion, que es la peor
+    # combinacion posible: el bug no se veria hasta estar arriba. El CASCADE
+    # de la migracion sigue estando, pero como red para quien borre por SQL
+    # crudo, no como el camino normal.
+    partes_mixto = db.relationship(
+        'GastoOrigenMixto', backref='gasto', cascade='all, delete-orphan')
+
     # --- FASE-CAJA-GENERAL-S3: con que plata se pago ------------------------
     # Vocabulario fijo (ver ORIGENES_FONDO). NULLABLE a proposito: NULL es
     # "todavia no se dijo", no un tercer origen. Las filas viejas se quedan
@@ -169,7 +194,8 @@ class Gasto(db.Model):
         # camino de escritura -- las migraciones y los scripts escriben SQL
         # crudo, que no pasa por el modelo ni por su @validates.
         db.CheckConstraint(
-            "origen_fondo IS NULL OR origen_fondo IN ('facturacion', 'capital')",
+            "origen_fondo IS NULL"
+            " OR origen_fondo IN ('facturacion', 'capital', 'mixto')",
             name='ck_gasto_origen_fondo_vocabulario'),
         # La regla que le da sentido al campo: 'facturacion' SIN cuenta no
         # contesta la pregunta (¿de la de Roman o de la de Nachi?), y
@@ -181,10 +207,17 @@ class Gasto(db.Model):
         # vieja podria tenerlo cargado sin que nadie haya dicho de que
         # bolsillo salio. Apretarlo aca obligaria a inventar ese dato o a
         # borrar el que ya hay.
+        #
+        # FASE-GASTO-MIXTO-S1 suma el caso 'mixto', y lo suma del lado de los
+        # que NO llevan cuenta: un gasto que salio de dos cuentas no tiene UNA
+        # cuenta que poner en `cuenta_pago_id`, y elegir cualquiera de las dos
+        # seria decir que el gasto entero salio de ahi. El reparto vive en
+        # `gasto_origen_mixto`, una fila por cuenta.
         db.CheckConstraint(
             "origen_fondo IS NULL"
             " OR (origen_fondo = 'facturacion' AND cuenta_pago_id IS NOT NULL)"
-            " OR (origen_fondo = 'capital' AND cuenta_pago_id IS NULL)",
+            " OR (origen_fondo IN ('capital', 'mixto')"
+            " AND cuenta_pago_id IS NULL)",
             name='ck_gasto_origen_fondo_cuenta'),
     )
 
@@ -234,6 +267,54 @@ class Gasto(db.Model):
             # muestra el hueco en vez de reventar la pantalla entera.
             return '%s — %s' % (etiqueta, ETIQUETA_SIN_ORIGEN)
         return '%s — %s' % (etiqueta, cuenta.etiqueta_socio)
+
+
+class GastoOrigenMixto(db.Model):
+    """FASE-GASTO-MIXTO-S1: cuanto de UN gasto salio de CADA cuenta de cobro.
+
+    Existe solo para los gastos con origen_fondo='mixto'. Un gasto de $68.000
+    pagado 53.000 de la cuenta de Roman y 15.000 de la de Nachi es UN gasto
+    con DOS filas aca -- no dos gastos, que es lo que habia que hacer antes de
+    esta slice y que duplicaba el gasto en Caja General.
+
+    POR QUE UNA TABLA Y NO DOS COLUMNAS
+
+    Porque las cuentas de cobro son datos, no estructura. Hoy son dos (Roman y
+    Nachi); manana pueden ser tres. Un par de columnas `monto_roman` /
+    `monto_nachi` hardcodearia en el esquema una cantidad que vive en
+    `cuenta_cobro`, y agregar una cuenta pediria una migracion.
+
+    LA SUMA NO LA CUIDA UN CHECK
+
+    Que las partes sumen exactamente `gasto.monto` es una regla ENTRE FILAS, y
+    un CHECK solo ve la fila que se esta escribiendo. Cuidarla en la base
+    pediria un trigger; se valida en la ruta (`_origen_del_form`), con el
+    mismo criterio de simplicidad que el resto del proyecto. Lo que si cuida
+    la base es lo que se puede mirar de a una fila: que el monto no sea
+    negativo.
+    """
+    __tablename__ = 'gasto_origen_mixto'
+    id = db.Column(db.Integer, primary_key=True)
+    gasto_id = db.Column(db.Integer,
+                         db.ForeignKey('gasto.id', ondelete='CASCADE'),
+                         nullable=False, index=True)
+    cuenta_cobro_id = db.Column(db.Integer, db.ForeignKey('cuenta_cobro.id'),
+                                nullable=False)
+    # Numeric(14, 2) como `gasto.monto`: si el total es Decimal y las partes
+    # fueran Float, la suma dejaria de cerrar por redondeo justo en el caso
+    # que esta tabla vino a representar.
+    monto = db.Column(db.Numeric(14, 2), nullable=False)
+
+    cuenta_cobro = db.relationship('CuentaCobro', backref='partes_gasto_mixto')
+
+    __table_args__ = (
+        # >= 0 y no > 0 a proposito: una parte en CERO es un dato, no un
+        # hueco. Dice "esta cuenta no puso nada EN ESTE gasto", que es
+        # distinto de que nadie haya dicho como se repartio. Negativo si se
+        # prohibe: una cuenta no puede aportar plata en contra.
+        db.CheckConstraint('monto >= 0',
+                           name='ck_gasto_origen_mixto_monto_no_negativo'),
+    )
 
 
 class Ingreso(db.Model):
