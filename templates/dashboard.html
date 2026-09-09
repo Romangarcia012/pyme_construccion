@@ -779,7 +779,15 @@
         <div class="seccion" style="margin-bottom: 25px;">
             <h2>Últimos Movimientos</h2>
             <div class="tabla-movimientos">
-                {% if gastos_recientes or ingresos_recientes %}
+                {# FASE-DASHBOARD-MOVIMIENTOS-S1: una sola lista ya mezclada
+                   y ordenada por fecha. Antes eran dos bucles -- primero los
+                   cinco gastos, despues los cinco ingresos --, asi que la
+                   tabla no se leia como una linea de tiempo, y las ventas no
+                   estaban en ninguno de los dos: viven en Pedido desde
+                   FASE-AUDITORIA-EXCEL-S3. El orden, el corte y cuanto vale
+                   cada fila los decide `_ultimos_movimientos` en app.py; aca
+                   solo se pinta. #}
+                {% if movimientos %}
                     <table>
                         <tr>
                             <th>Fecha</th>
@@ -788,22 +796,30 @@
                             <th>Categoría</th>
                             <th style="text-align: right;">Monto</th>
                         </tr>
-                        {% for gasto in gastos_recientes[:5] %}
+                        {% for m in movimientos %}
                             <tr>
-                                <td>{{ gasto.fecha.strftime('%d/%m/%Y') }}</td>
-                                <td><span style="color: #dc3545; font-weight: 600;">Gasto</span></td>
-                                <td>{{ gasto.descripcion[:20] }}...</td>
-                                <td>{{ gasto.categoria.nombre if gasto.categoria else '-' }}</td>
-                                <td style="text-align: right;"><span class="monto-negativo">-${{ "%.0f"|format(gasto.monto) }}</span></td>
-                            </tr>
-                        {% endfor %}
-                        {% for ingreso in ingresos_recientes[:5] %}
-                            <tr>
-                                <td>{{ ingreso.fecha.strftime('%d/%m/%Y') }}</td>
-                                <td><span style="color: #28a745; font-weight: 600;">Ingreso</span></td>
-                                <td>{{ ingreso.descripcion[:20] }}...</td>
-                                <td>{{ ingreso.categoria.nombre if ingreso.categoria else '-' }}</td>
-                                <td style="text-align: right;"><span class="monto-positivo">+${{ "%.0f"|format(ingreso.monto) }}</span></td>
+                                <td>{{ m.fecha.strftime('%d/%m/%Y') }}</td>
+                                <td>
+                                    {% if m.tipo == 'salida' %}
+                                        <span style="color: #dc3545; font-weight: 600;">{{ m.etiqueta }}</span>
+                                    {% else %}
+                                        <span style="color: #28a745; font-weight: 600;">{{ m.etiqueta }}</span>
+                                    {% endif %}
+                                </td>
+                                {# El truncate de Jinja corta en 20 y agrega los
+                                   puntos SOLO si sobro texto. El `[:20] ~ '...'`
+                                   de antes se los ponia siempre, asi que un
+                                   gasto llamado "Nafta" se mostraba
+                                   "Nafta..." como si faltara algo. #}
+                                <td>{{ m.descripcion|truncate(20, True) }}</td>
+                                <td>{{ m.categoria }}</td>
+                                <td style="text-align: right;">
+                                    {% if m.tipo == 'salida' %}
+                                        <span class="monto-negativo">-${{ "%.0f"|format(m.monto) }}</span>
+                                    {% else %}
+                                        <span class="monto-positivo">+${{ "%.0f"|format(m.monto) }}</span>
+                                    {% endif %}
+                                </td>
                             </tr>
                         {% endfor %}
                     </table>

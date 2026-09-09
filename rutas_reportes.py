@@ -528,6 +528,32 @@ def margen():
 ETIQUETA_SIN_SOCIO = 'Sin socio asignado'
 
 
+def _es_venta():
+    """Los dos filtros que deciden que un pedido ES una venta.
+
+    Se escriben UNA vez y viajan como lista para que quien liste pedidos y
+    quien los sume apliquen literalmente el mismo criterio:
+
+        cancelado   no le entro a nadie (`ESTADOS_NO_VENDIDOS`, el mismo
+                    criterio que margen y que devoluciones)
+        regalo      la mercaderia salio del deposito pero no entro un peso
+                    (FASE-CAJA-SOCIO-S5)
+
+    Hasta FASE-DASHBOARD-MOVIMIENTOS-S1 estas dos lineas vivian sueltas dentro
+    de `_facturado_por_canal` y no hacia falta mas: era el unico lugar que
+    contestaba "esto es una venta". Al aparecer el segundo -- los ultimos
+    movimientos del dashboard, que no suman sino que listan -- copiarlas seria
+    la forma de que un dia dejen de ser iguales y la lista muestre un pedido
+    que el total no cuenta, sin que nada avise.
+
+    Devuelve criterios, no una consulta: las dos consultas tienen forma
+    distinta (una agrupa y suma, la otra trae filas y ordena) y lo unico que
+    comparten es a que pedidos miran.
+    """
+    return [func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS),
+            Pedido.es_regalo.is_(False)]
+
+
 def _facturado_por_canal(empresa_id):
     """{(canal_id, cuenta_override_id): (facturado, pedidos, comision, sin comision)}.
 
@@ -596,8 +622,7 @@ def _facturado_por_canal(empresa_id):
                               func.count(Pedido.id)
                               - func.count(Pedido.comision_plataforma))
              .filter(Pedido.empresa_id == empresa_id)
-             .filter(func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS))
-             .filter(Pedido.es_regalo.is_(False))
+             .filter(*_es_venta())
              .group_by(Pedido.canal_id, Pedido.cuenta_cobro_override_id)
              .all())
     return {(canal_id, override_id): (_decimal(total), int(cantidad or 0),
@@ -1118,6 +1143,46 @@ def facturado_neto(empresa_id):
     sin_comision = sum(fila[3] for fila in facturado.values())
     return FacturadoNeto(neto=bruto - comision, bruto=bruto, comision=comision,
                          pedidos=pedidos, sin_comision=sin_comision)
+
+
+def ventas_recientes(empresa_id, limite):
+    """Las ultimas `limite` ventas, como filas para mostrar. No suma nada.
+
+    La usa el bloque "Ultimos movimientos" del dashboard
+    (FASE-DASHBOARD-MOVIMIENTOS-S1), que hasta esa slice mostraba Gasto e
+    Ingreso y nada mas. Desde que las ventas salieron de Ingreso
+    (FASE-AUDITORIA-EXCEL-S3) y viven en Pedido, una venta de ayer no aparecia
+    en ningun lado de esa lista: el bloque decia "ultimos movimientos" y
+    mostraba solo la mitad que no vende.
+
+    QUE PEDIDO ENTRA lo dice `_es_venta()`, el mismo predicado que usa
+    `_facturado_por_canal` para el Facturado de caja-socio y del
+    resumen-general. No es un criterio parecido: es el mismo objeto de
+    filtros, y por eso la lista no puede mostrar un pedido que el total de
+    arriba no cuenta.
+
+    CUANTO VALE CADA FILA es `total - total_envio`, tambien lo mismo que
+    Facturado: el envio que paga el comprador entra y sale hacia el correo el
+    mismo dia, y contarlo dice que la venta dejo una plata que estaba de paso.
+
+    LA COMISION NO SE RESTA ACA, y esa es la unica diferencia con el `neto` de
+    `facturado_neto`. Es a proposito: la comision es un dato que Roman carga a
+    mano despues, y mientras falte vale NULL. Restarla por fila obligaria a
+    elegir entre mostrar la venta con un guion o mentir tratando el NULL como
+    cero, cuando la pregunta de este bloque es "que se movio y por cuanto" y
+    no "cuanto quedo". Es la misma columna que muestra caja-socio bajo
+    Facturado, que tampoco la resta.
+
+    Trae los pedidos con su canal ya cargado: la fila lo nombra, y sin el
+    joinedload serian `limite` consultas mas para escribir una palabra.
+    """
+    return (Pedido.query
+            .options(joinedload(Pedido.canal))
+            .filter(Pedido.empresa_id == empresa_id)
+            .filter(*_es_venta())
+            .order_by(Pedido.fecha_pedido.desc())
+            .limit(limite)
+            .all())
 
 
 def _total_ingresos(empresa_id):

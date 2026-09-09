@@ -116,7 +116,7 @@ app.register_blueprint(productos_bp)
 # usa como ingresos. Se importa junto al blueprint y no arriba del archivo
 # porque rutas_reportes arrastra la cadena entera de blueprints, y esa cadena
 # necesita que `app` y `db` ya existan.
-from rutas_reportes import reportes_bp, facturado_neto
+from rutas_reportes import reportes_bp, facturado_neto, ventas_recientes
 app.register_blueprint(reportes_bp)
 
 # DEVOLUCIONES Y VUELTA DE STOCK (FASE-DEVOLUCIONES-S2)
@@ -658,6 +658,117 @@ def _origen_del_form(form, empresa_id, monto=None, requerido=False,
 
 # ======================== DASHBOARD ========================
 
+# Cuantas filas muestra "Ultimos movimientos". Es el techo que ya tenia la
+# pantalla antes de FASE-DASHBOARD-MOVIMIENTOS-S1 -- la plantilla cortaba en
+# cinco gastos MAS cinco ingresos -- y se mantiene: el bloque es una mirada
+# rapida a lo ultimo que paso, no el libro. El libro por movimiento cargado a
+# mano es /caja-general; el de ventas, /ventas.
+TOPE_MOVIMIENTOS = 10
+
+
+def _ultimos_movimientos(empresa_id):
+    """Las ultimas `TOPE_MOVIMIENTOS` cosas que pasaron, mezcladas y por fecha.
+
+    QUE CAMBIO EN FASE-DASHBOARD-MOVIMIENTOS-S1
+
+    El bloque miraba Gasto e Ingreso, igual que /caja-general. Eso alcanzaba
+    cuando las ventas se cargaban a mano como Ingreso; desde
+    FASE-AUDITORIA-EXCEL-S3 viven en Pedido, y el resultado era que una venta
+    de ayer no aparecia en "ultimos movimientos" -- la pantalla decia que no
+    habia pasado nada en una semana en la que se vendio todos los dias.
+
+    ORDENADO POR FECHA, NO AGRUPADO POR TIPO
+
+    Antes la plantilla ponia los cinco gastos y despues los cinco ingresos, asi
+    que la lista no se podia leer como una linea de tiempo. Ahora las tres
+    fuentes se intercalan por fecha descendente y el corte cae donde cae: si
+    los diez movimientos mas nuevos son gastos, se muestran diez gastos. Un
+    cupo por tipo pondria una venta vieja arriba de un gasto de hoy, que es
+    justamente lo que un "ultimos" no puede hacer.
+
+    Se piden `TOPE_MOVIMIENTOS` de cada fuente y se corta despues de mezclar:
+    en el peor caso una sola fuente se queda con las diez filas, asi que traer
+    menos de cada una dejaria huecos.
+
+    EL DESEMPATE ES EL TIPO Y EL ID, y no el azar del motor: Gasto e Ingreso
+    guardan `fecha` como Date, asi que dos movimientos del mismo dia empatan de
+    verdad y sin criterio la lista cambiaria de orden entre dos F5 sobre los
+    mismos datos.
+
+    CUANTO VALE UNA VENTA no se decide aca: sale de `ventas_recientes`, que lo
+    define con el mismo criterio que el Facturado de caja-socio (sin envio, sin
+    cancelados, sin regalos). Este archivo no vuelve a escribir esa cuenta.
+    """
+    gastos = (Gasto.query
+              .options(joinedload(Gasto.categoria))
+              .filter_by(empresa_id=empresa_id)
+              .order_by(Gasto.fecha.desc())
+              .limit(TOPE_MOVIMIENTOS).all())
+    ingresos = (Ingreso.query
+                .options(joinedload(Ingreso.categoria))
+                .filter_by(empresa_id=empresa_id)
+                .order_by(Ingreso.fecha.desc())
+                .limit(TOPE_MOVIMIENTOS).all())
+    ventas = ventas_recientes(empresa_id, TOPE_MOVIMIENTOS)
+
+    movimientos = []
+    for gasto in gastos:
+        movimientos.append({
+            'fecha': gasto.fecha,
+            'tipo': 'salida',
+            'etiqueta': 'Gasto',
+            'descripcion': gasto.descripcion,
+            'categoria': gasto.categoria.nombre if gasto.categoria else '-',
+            'monto': gasto.monto,
+            'id': gasto.id,
+        })
+    for ingreso in ingresos:
+        movimientos.append({
+            'fecha': ingreso.fecha,
+            'tipo': 'entrada',
+            'etiqueta': 'Ingreso',
+            'descripcion': ingreso.descripcion,
+            'categoria': (ingreso.categoria.nombre
+                          if ingreso.categoria else '-'),
+            'monto': ingreso.monto,
+            'id': ingreso.id,
+        })
+    for venta in ventas:
+        # `fecha_pedido` es DateTime y las otras dos fechas son Date: sin el
+        # .date() el sort de abajo compara los dos tipos y revienta con
+        # TypeError la primera vez que una venta y un gasto caen juntos.
+        movimientos.append({
+            'fecha': venta.fecha_pedido.date(),
+            'tipo': 'entrada',
+            'etiqueta': 'Venta',
+            'descripcion': _descripcion_de_venta(venta),
+            'categoria': venta.canal.nombre if venta.canal else '-',
+            # Sin el envio, igual que Facturado. La resta la hace
+            # `ventas_recientes` en su docstring; aca solo se lee.
+            'monto': (venta.total or CERO) - (venta.total_envio or CERO),
+            'id': venta.id,
+        })
+
+    movimientos.sort(key=lambda m: (m['fecha'], m['etiqueta'], m['id']),
+                     reverse=True)
+    return movimientos[:TOPE_MOVIMIENTOS]
+
+
+def _descripcion_de_venta(venta):
+    """Como se llama una venta en la lista de movimientos.
+
+    El nombre del comprador cuando esta -- es lo que Roman reconoce de un
+    vistazo --, y si no el canal por el que entro. Las ventas de Tiendanube y
+    Mercado Libre traen comprador; las de mostrador cargadas a mano muchas
+    veces no, y ahi "Venta - Venta manual" dice todo lo que se sabe.
+    """
+    nombre = (venta.comprador_nombre or '').strip()
+    if nombre:
+        return 'Venta - %s' % nombre
+    canal = venta.canal.nombre if venta.canal else 'sin canal'
+    return 'Venta - %s' % canal
+
+
 @app.route('/dashboard')
 @login_required
 def dashboard():
@@ -737,17 +848,15 @@ def dashboard():
     ingresos_cat = ingresos_por_categoria(ingresos)
     
     # Últimos movimientos
-    gastos_recientes = Gasto.query.filter_by(empresa_id=empresa_id).order_by(Gasto.fecha.desc()).limit(10).all()
-    ingresos_recientes = Ingreso.query.filter_by(empresa_id=empresa_id).order_by(Ingreso.fecha.desc()).limit(10).all()
-    
+    movimientos = _ultimos_movimientos(empresa_id)
+
     return render_template('dashboard.html',
                          current_user=current_user,
                          usuario=current_user,
                          analisis=analisis,
                          gastos_cat=gastos_cat,
                          ingresos_cat=ingresos_cat,
-                         gastos_recientes=gastos_recientes,
-                         ingresos_recientes=ingresos_recientes)
+                         movimientos=movimientos)
 
 # ======================== GASTOS ========================
 
