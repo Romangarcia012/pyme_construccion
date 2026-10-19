@@ -1511,6 +1511,10 @@ def nueva_categoria():
 
             categoria = Categoria(nombre=nombre, tipo=tipo,
                                   naturaleza=naturaleza,
+                                  # FASE-RESULTADOS-S2: solo un gasto puede
+                                  # ser de prueba (lo exige el CHECK).
+                                  es_prueba=(naturaleza == NATURALEZA_GASTO
+                                             and bool(request.form.get('es_prueba'))),
                                   empresa_id=current_user.empresa_id,
                                   usuario_id=current_user.id)
             db.session.add(categoria)
@@ -1576,6 +1580,11 @@ def editar_categoria(id):
                     flash('Naturaleza inválida', 'danger')
                     return redirect(url_for('editar_categoria', id=id))
                 categoria.naturaleza = naturaleza
+                # FASE-RESULTADOS-S2: viaja con la naturaleza porque es un
+                # checkbox -- sin tildar no se manda --, y solo vale sobre
+                # un gasto.
+                categoria.es_prueba = (naturaleza == NATURALEZA_GASTO
+                                       and bool(request.form.get('es_prueba')))
             db.session.commit()
             
             registrar_cambio(current_user.id, 'editar', 'categoria', categoria.id, 

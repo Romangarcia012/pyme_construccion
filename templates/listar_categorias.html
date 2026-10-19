@@ -241,7 +241,7 @@
                                    distinto a proposito: es un dato que falta. #}
                                 <td>
                                     {% if item.categoria.tipo == 'gasto' %}
-                                        <span {% if not item.categoria.naturaleza %}style="color: #d6a441;"{% endif %}>{{ item.categoria.naturaleza_legible }}</span>
+                                        <span {% if not item.categoria.naturaleza %}style="color: #d6a441;"{% endif %}>{{ item.categoria.naturaleza_legible }}</span>{% if item.categoria.es_prueba %} · prueba{% endif %}
                                     {% else %}—{% endif %}
                                 </td>
                                 <td>

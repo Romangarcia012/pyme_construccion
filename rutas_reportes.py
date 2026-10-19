@@ -1331,8 +1331,10 @@ def resumen_general():
 #   - Costo de lo vendido (CMV, el snapshot de cada linea)
 #   +/- Envios (cobrado - pagado por el vendedor)
 #   = Utilidad bruta                         <- suma de la ganancia de margen
-#   - Gastos operativos (naturaleza 'gasto', CUALQUIER origen)
+#   - Gastos operativos (naturaleza 'gasto', CUALQUIER origen, sin pruebas)
 #   - Costo de lo regalado (marketing)
+#   = Utilidad neta antes de pruebas         <- FASE-RESULTADOS-S2
+#   - Muestras y productos de prueba (categoria.es_prueba)
 #   = Utilidad neta
 #
 # ACTIVO NO ES GASTO
@@ -1486,7 +1488,17 @@ def _por_socio_ordenado(por_socio):
             for clave in claves]
 
 
-def _gastos_operativos(empresa_id, periodo=None):
+def _gasto_de_prueba(es_prueba):
+    """Condicion sobre Gasto: su categoria es (o no es) de muestras.
+
+    FASE-RESULTADOS-S2. Va por `categoria.es_prueba` y no por el nombre:
+    renombrar "Productos de prueba" no puede pasar su gasto a operativos.
+    """
+    return Gasto.categoria_id.in_(
+        select(Categoria.id).where(Categoria.es_prueba.is_(es_prueba)))
+
+
+def _gastos_operativos(empresa_id, periodo=None, pruebas=False):
     """Los gastos de naturaleza 'gasto', con sus subtotales por origen.
 
     El total es UNO y resta entero. Los subtotales dicen de donde salio:
@@ -1495,8 +1507,13 @@ def _gastos_operativos(empresa_id, periodo=None):
         capital      del pool de los socios
         mixto        abierto por la PARTE que puso cada cuenta
         sin origen   no se dijo de que bolsillo, pero se gasto igual
+
+    FASE-RESULTADOS-S2: `pruebas` parte el conjunto en dos que no se pisan
+    -- los recurrentes (False) y las muestras (True) -- con la misma cuenta
+    para los dos. Sumados dan exactamente lo que daba antes la funcion sola.
     """
     condicion = and_(_gasto_de_naturaleza(NATURALEZA_GASTO),
+                     _gasto_de_prueba(pruebas),
                      _gasto_en_periodo(periodo))
 
     total, cantidad = _total_gastos(empresa_id, condicion)
@@ -1599,11 +1616,15 @@ def resultado_del_negocio(empresa_id, periodo=None, pedidos=None):
 
     regalos = _costo_de_regalos(empresa_id, periodo)
     gastos = _gastos_operativos(empresa_id, periodo)
+    # FASE-RESULTADOS-S2: las muestras restan igual, pero en su propia linea,
+    # despues de la utilidad del negocio recurrente.
+    pruebas = _gastos_operativos(empresa_id, periodo, pruebas=True)
     sin_clasificar = _total_gastos(
         empresa_id, and_(_gasto_sin_naturaleza(), _gasto_en_periodo(periodo)))
 
     gastos_operativos_total = gastos['total'] + regalos['costo']
-    utilidad_neta = utilidad_bruta - gastos_operativos_total
+    utilidad_antes_de_pruebas = utilidad_bruta - gastos_operativos_total
+    utilidad_neta = utilidad_antes_de_pruebas - pruebas['total']
 
     return {
         'periodo': periodo,
@@ -1622,6 +1643,11 @@ def resultado_del_negocio(empresa_id, periodo=None, pedidos=None):
         'gastos_operativos_total': gastos_operativos_total,
         'gastos_operativos_pct': _porcentaje(gastos_operativos_total,
                                              ventas_netas),
+        'utilidad_antes_de_pruebas': utilidad_antes_de_pruebas,
+        'utilidad_antes_de_pruebas_pct': _porcentaje(utilidad_antes_de_pruebas,
+                                                     ventas_netas),
+        'pruebas': pruebas,
+        'pruebas_pct': _porcentaje(pruebas['total'], ventas_netas),
         'sin_clasificar': sin_clasificar,
         'utilidad_neta': utilidad_neta,
         'utilidad_neta_pct': _porcentaje(utilidad_neta, ventas_netas),

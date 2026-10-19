@@ -259,6 +259,18 @@
                             <td class="num">{{ plata(resultado.regalos.costo) }}</td>
                             <td></td>
                         </tr>
+                        {# FASE-RESULTADOS-S2: el negocio recurrente, antes de las
+                           muestras. Las muestras siguen restando, en su linea. #}
+                        <tr class="total">
+                            <td>= Utilidad neta antes de pruebas</td>
+                            <td class="num {% if resultado.utilidad_antes_de_pruebas < 0 %}negativo{% endif %}">{{ plata(resultado.utilidad_antes_de_pruebas) }}</td>
+                            <td class="num pct {% if resultado.utilidad_antes_de_pruebas_pct is not none and resultado.utilidad_antes_de_pruebas_pct < 0 %}negativo{% endif %}">{{ pct(resultado.utilidad_antes_de_pruebas_pct) }}</td>
+                        </tr>
+                        <tr>
+                            <td>− Muestras y productos de prueba <span class="detalle">({{ resultado.pruebas.cantidad }} gasto{{ '' if resultado.pruebas.cantidad == 1 else 's' }})</span></td>
+                            <td class="num">{{ plata(resultado.pruebas.total) }}</td>
+                            <td class="num pct">{{ pct(resultado.pruebas_pct) }}</td>
+                        </tr>
                         <tr class="total">
                             <td>= Utilidad neta</td>
                             <td class="num {% if resultado.utilidad_neta < 0 %}negativo{% endif %}">{{ plata(resultado.utilidad_neta) }}</td>

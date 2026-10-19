@@ -106,6 +106,18 @@ class Categoria(db.Model):
     # FASE-RESULTADOS-S1: activo o gasto (ver NATURALEZAS). Solo la llevan las
     # categorias de tipo 'gasto': un ingreso no se capitaliza ni se consume.
     naturaleza = db.Column(db.String(10))
+    # FASE-RESULTADOS-S2: muestras y productos de prueba. Siguen siendo GASTO
+    # (decision de Roman) y restan igual; lo unico que cambia es que el
+    # resultado del negocio los muestra en su propia linea, debajo de una
+    # "utilidad neta antes de pruebas", para que no tapen como rinde el
+    # negocio recurrente. Es una marca y no una convencion sobre el nombre:
+    # renombrar la categoria no puede cambiar en que linea cae su gasto.
+    #
+    # NOT NULL con default False, mismo criterio que `pedido.es_regalo`: "no
+    # es de prueba" es la respuesta de casi todas las filas, no un dato que
+    # falte.
+    es_prueba = db.Column(db.Boolean, nullable=False, default=False,
+                          server_default=sa_text('false'))
     # FASE-CATEGORIA-S1: mismo par que Gasto e Ingreso, y por el mismo motivo.
     # El vocabulario con el que se etiqueta la caja es de la EMPRESA: las siete
     # categorias Korvo las sembro la migracion sobre UN usuario, y mientras esa
@@ -134,6 +146,12 @@ class Categoria(db.Model):
         db.CheckConstraint(
             "naturaleza IS NULL OR tipo = 'gasto'",
             name='ck_categoria_naturaleza_solo_gasto'),
+        # FASE-RESULTADOS-S2: una prueba es un gasto. Marcar como prueba una
+        # categoria de activo la sacaria del stock y la restaria del
+        # resultado por la puerta de atras.
+        db.CheckConstraint(
+            "es_prueba = false OR naturaleza = 'gasto'",
+            name='ck_categoria_prueba_es_gasto'),
     )
 
     @db.validates('naturaleza')
