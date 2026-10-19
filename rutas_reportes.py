@@ -60,23 +60,30 @@ pie del archivo, arriba de su propia ruta.
 from collections import OrderedDict, namedtuple
 from decimal import ROUND_HALF_UP, Decimal
 
-from flask import Blueprint, render_template, url_for
+from datetime import date, datetime
+
+from flask import Blueprint, render_template, request, url_for
 from flask_login import current_user, login_required
-from sqlalchemy import func, true
+from sqlalchemy import and_, func, or_, select, true
 from sqlalchemy.orm import joinedload
 
 from models import (
+    # FASE-RESULTADOS-S1: activo o gasto, la naturaleza de la categoria.
+    NATURALEZA_ACTIVO,
+    NATURALEZA_GASTO,
     ORIGEN_CAPITAL,
     ORIGEN_FACTURACION,
     # FASE-GASTO-MIXTO-S1: un gasto pagado entre varias cuentas y su reparto.
     ORIGEN_MIXTO,
     SOCIOS,
     CanalVenta,
+    Categoria,
     CuentaCobro,
     Gasto,
     GastoOrigenMixto,
     Ingreso,
     Pedido,
+    Producto,
     db,
 )
 from rutas_devoluciones import devuelto_por_item
@@ -201,6 +208,11 @@ def _calcular(pedido):
     return {
         'ingreso_neto': ingreso_neto,
         'envio': envio,
+        # FASE-RESULTADOS-S1: los dos costos del pedido, sueltos, para que el
+        # resultado del negocio los escriba en su propio renglon sumando lo
+        # mismo que aca se resta y no recalculandolo.
+        'comision': pedido.comision_plataforma,
+        'envio_vendedor': pedido.costo_envio_vendedor,
         'costo_mercaderia': costo_mercaderia,
         'costo_total': costo_total,
         'ganancia': ganancia,
@@ -327,20 +339,24 @@ def margen():
     """Ganancia y margen por producto y por canal.
 
     Un solo barrido de pedidos alimenta los cuatro bloques: los dos cortes,
-    los pedidos de varias lineas y los que no se pudieron calcular. Sin
-    filtros ni rango de fechas -- se veran cuando haya volumen que lo pida.
+    los pedidos de varias lineas y los que no se pudieron calcular.
+
+    FASE-RESULTADOS-S1 le agrego arriba el "Resultado del negocio" y el bloque
+    de "Activos", y un filtro por mes (`?periodo=AAAA-MM`; sin el, todo). El
+    resultado sale de ESTOS mismos pedidos -- se le pasan, no los vuelve a
+    pedir -- y por eso su utilidad bruta es por construccion la suma de la
+    ganancia de los pedidos completos de abajo.
     """
     empresa_id = current_user.empresa_id
+    periodo = _periodo_de(request.args.get('periodo'))
 
-    # Mismo filtro de cancelados que S1: un pedido dado de baja no vendio ni
-    # costo nada, y contarlo ensuciaria las dos puntas de la cuenta.
-    pedidos = (Pedido.query
-               .options(joinedload(Pedido.canal),
-                        joinedload(Pedido.items))
-               .filter(Pedido.empresa_id == empresa_id)
-               .filter(func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS))
-               .order_by(Pedido.fecha_pedido.desc(), Pedido.id.desc())
-               .all())
+    # FASE-RESULTADOS-S1: los mismos dos filtros que caja-socio
+    # (`_es_venta`). Hasta aca solo salian los cancelados, y los regalos
+    # entraban como ventas de $0 con su costo adentro: el Sorteo y el
+    # microfono regalado restaban $26.116,72 de "ganancia" que no era la
+    # rentabilidad de ninguna venta. El costo de lo regalado no se pierde: es
+    # un renglon propio del resultado, como marketing.
+    pedidos = _pedidos_vendidos(empresa_id, periodo)
 
     # Los mapeos de todos los productos vendidos, de una sola vez: son los que
     # deciden que variantes van juntas, y pedirlos por fila serian N+1 viajes.
@@ -456,13 +472,25 @@ def margen():
                             key=lambda grupo: grupo['nombre'].lower())
     filas_canal = [_cerrar(grupo) for grupo in por_canal.values()]
 
+    resultado = resultado_del_negocio(empresa_id, periodo, pedidos=pedidos)
+    # Los activos son una foto de HOY y no del mes: el stock que hay no
+    # depende de que periodo se este mirando. La conciliacion compara contra
+    # todo lo comprado, asi que necesita el costo de lo vendido de siempre.
+    resultado_historico = (resultado if periodo is None
+                           else resultado_del_negocio(empresa_id))
+    activos = activos_del_negocio(empresa_id, resultado_historico)
+
     return render_template('reportes_margen.html',
                            productos=filas_producto,
                            canales=filas_canal,
                            multilinea=multilinea,
                            incompletos=incompletos,
                            descuadres=descuadres,
-                           total_pedidos=len(pedidos))
+                           total_pedidos=len(pedidos),
+                           resultado=resultado,
+                           activos=activos,
+                           periodo=periodo,
+                           periodos=_periodos_disponibles(empresa_id))
 
 
 # ==========================================================================
@@ -642,7 +670,9 @@ def _regalos_por_canal(empresa_id):
     Solo el CONTADOR, no el monto. El monto de un regalo es un precio
     simbolico que se puso para poder cargarlo -- $1 la unidad -- y mostrarlo
     como plata invitaria a sumarlo o restarlo de algo. Lo que costo de verdad
-    esa mercaderia ya esta cargado como gasto, que es donde va.
+    esa mercaderia es la compra, que ya se pago; desde FASE-RESULTADOS-S1 el
+    resultado del negocio lo resta como marketing a partir del snapshot de
+    costo del pedido (`_costo_de_regalos`), no de un gasto cargado a mano.
     """
     filas = (db.session.query(Pedido.canal_id,
                               Pedido.cuenta_cobro_override_id,
@@ -750,39 +780,15 @@ def _gastado_por_socio(empresa_id):
 
     def sumar(socio, monto, cantidad):
         antes = acumulado.get(socio, (CERO, 0))
-        acumulado[socio] = (antes[0] + Decimal(monto or 0),
-                            antes[1] + int(cantidad or 0))
+        acumulado[socio] = (antes[0] + monto, antes[1] + cantidad)
 
     # 1. Los que salieron ENTEROS de una sola cuenta (como desde S3).
-    for socio, monto, cantidad in (
-            db.session.query(CuentaCobro.socio,
-                             func.coalesce(func.sum(Gasto.monto), 0),
-                             func.count(Gasto.id))
-            .join(CuentaCobro, Gasto.cuenta_pago_id == CuentaCobro.id)
-            .filter(Gasto.empresa_id == empresa_id)
-            .filter(Gasto.origen_fondo == ORIGEN_FACTURACION)
-            .group_by(CuentaCobro.socio)
-            .all()):
+    for socio, (monto, cantidad) in _gasto_facturacion_por_socio(
+            empresa_id).items():
         sumar(socio, monto, cantidad)
 
     # 2. Las PARTES de los que se pagaron entre varias cuentas.
-    #
-    # El filtro por `Gasto.origen_fondo == ORIGEN_MIXTO` no es redundante con
-    # la existencia de la fila: si un gasto dejo de ser mixto en una edicion,
-    # su reparto viejo no tiene que seguir restando. La ruta lo borra, y este
-    # filtro es la segunda red por si alguna vez no lo hiciera.
-    for socio, monto, cantidad in (
-            db.session.query(CuentaCobro.socio,
-                             func.coalesce(func.sum(GastoOrigenMixto.monto), 0),
-                             func.count(GastoOrigenMixto.id))
-            .select_from(GastoOrigenMixto)
-            .join(Gasto, GastoOrigenMixto.gasto_id == Gasto.id)
-            .join(CuentaCobro,
-                  GastoOrigenMixto.cuenta_cobro_id == CuentaCobro.id)
-            .filter(Gasto.empresa_id == empresa_id)
-            .filter(Gasto.origen_fondo == ORIGEN_MIXTO)
-            .group_by(CuentaCobro.socio)
-            .all()):
+    for socio, (monto, cantidad) in _gasto_mixto_por_socio(empresa_id).items():
         sumar(socio, monto, cantidad)
 
     # Una cuenta sin socio cae en la clave None, que es la misma fila donde ya
@@ -790,6 +796,52 @@ def _gastado_por_socio(empresa_id):
     # misma plata sin identificar, asi que se restan entre si igual que los de
     # cualquier socio.
     return acumulado
+
+
+def _gasto_facturacion_por_socio(empresa_id, *condiciones):
+    """{socio: (monto, cantidad)} de los gastos 'facturacion', ENTEROS.
+
+    Las dos mitades de `_gastado_por_socio`, separadas en FASE-RESULTADOS-S1
+    para que el resultado del negocio pueda mostrar cada origen en su propio
+    renglon -- y con `condiciones` extra (naturaleza, periodo) -- sin
+    escribir una tercera consulta que diga lo mismo. Sin condiciones dan
+    exactamente lo que daban adentro de `_gastado_por_socio`.
+    """
+    return {socio: (Decimal(monto or 0), int(cantidad or 0))
+            for socio, monto, cantidad in (
+                db.session.query(CuentaCobro.socio,
+                                 func.coalesce(func.sum(Gasto.monto), 0),
+                                 func.count(Gasto.id))
+                .join(CuentaCobro, Gasto.cuenta_pago_id == CuentaCobro.id)
+                .filter(Gasto.empresa_id == empresa_id)
+                .filter(Gasto.origen_fondo == ORIGEN_FACTURACION)
+                .filter(*condiciones)
+                .group_by(CuentaCobro.socio)
+                .all())}
+
+
+def _gasto_mixto_por_socio(empresa_id, *condiciones):
+    """{socio: (monto, cantidad)} de las PARTES de los gastos 'mixto'.
+
+    El filtro por `Gasto.origen_fondo == ORIGEN_MIXTO` no es redundante con
+    la existencia de la fila: si un gasto dejo de ser mixto en una edicion,
+    su reparto viejo no tiene que seguir restando. La ruta lo borra, y este
+    filtro es la segunda red por si alguna vez no lo hiciera.
+    """
+    return {socio: (Decimal(monto or 0), int(cantidad or 0))
+            for socio, monto, cantidad in (
+                db.session.query(CuentaCobro.socio,
+                                 func.coalesce(func.sum(GastoOrigenMixto.monto), 0),
+                                 func.count(GastoOrigenMixto.id))
+                .select_from(GastoOrigenMixto)
+                .join(Gasto, GastoOrigenMixto.gasto_id == Gasto.id)
+                .join(CuentaCobro,
+                      GastoOrigenMixto.cuenta_cobro_id == CuentaCobro.id)
+                .filter(Gasto.empresa_id == empresa_id)
+                .filter(Gasto.origen_fondo == ORIGEN_MIXTO)
+                .filter(*condiciones)
+                .group_by(CuentaCobro.socio)
+                .all())}
 
 
 def _total_gastos(empresa_id, condicion):
@@ -898,10 +950,11 @@ def caja_socio():
     descontara. El pedido tiene que existir porque la mercaderia se fue de
     verdad; lo que no existio es el ingreso.
 
-    Que el pedido no sume no lo hace gratis: su costo ya esta cargado como
-    gasto y ahi se queda. Y el stock que descontó tampoco se revierte -- son
-    tres cosas distintas sobre el mismo pedido y esta pantalla solo opina
-    sobre una.
+    Que el pedido no sume no lo hace gratis: la mercaderia se pago al
+    comprarla, y el resultado del negocio (/reportes/margen) resta su costo
+    como marketing. Y el stock que descontó tampoco se revierte -- son tres
+    cosas distintas sobre el mismo pedido y esta pantalla solo opina sobre
+    una.
 
     El contador de regalos se muestra igual, aunque no sume: un pedido que
     desaparece de la cuenta sin decir nada obliga a que alguien descubra por
@@ -1264,3 +1317,373 @@ def resumen_general():
                            gastos_cantidad=gastos_cantidad,
                            entra=entra,
                            posicion_real=posicion_real)
+
+
+# ==========================================================================
+# FASE-RESULTADOS-S1 -- el resultado del negocio y lo que el negocio tiene
+#
+# Las pantallas de caja contestan "cuanta plata hay"; /reportes/margen
+# contestaba "cuanto deja cada venta". Faltaba la cuenta que junta las dos:
+# cuanto GANO el negocio, restando ademas lo que cuesta funcionar.
+#
+#     Ventas netas (sin envio, sin regalos, sin cancelados)
+#   - Comisiones de plataforma
+#   - Costo de lo vendido (CMV, el snapshot de cada linea)
+#   +/- Envios (cobrado - pagado por el vendedor)
+#   = Utilidad bruta                         <- suma de la ganancia de margen
+#   - Gastos operativos (naturaleza 'gasto', CUALQUIER origen)
+#   - Costo de lo regalado (marketing)
+#   = Utilidad neta
+#
+# ACTIVO NO ES GASTO
+#
+# Una compra de mercaderia no baja la ganancia el dia que se paga: se
+# convierte en stock, y baja la ganancia recien cuando se vende, via el CMV.
+# Restarla tambien como gasto contaria la misma mercaderia dos veces. Eso es
+# lo que decide `categoria.naturaleza`, y es lo unico que decide: de que
+# bolsillo salio la plata (`origen_fondo`) no cambia si resta. Un gasto de
+# publicidad pagado con capital resta igual que uno pagado con facturacion;
+# el origen se muestra en subtotales, pero el total lo resta entero.
+#
+# NADA SE CALCULA DOS VECES
+#
+# La utilidad bruta sale de `_calcular` sobre los MISMOS pedidos que dibujan
+# el resto de /reportes/margen; los gastos, de `_total_gastos` y de las dos
+# mitades de `_gastado_por_socio`, las mismas consultas que usan caja-socio y
+# resumen-general, con una condicion mas.
+#
+# LO QUE NO ES
+#
+# Es antes de impuestos a las ganancias, no descuenta devoluciones (opcion C:
+# hoy no se restan de lo vendido ni del margen) y no es un balance.
+# ==========================================================================
+
+MESES = ('enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio',
+         'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre')
+
+
+class Periodo(namedtuple('Periodo', 'clave desde hasta etiqueta')):
+    """Un mes calendario: [desde, hasta), con `hasta` el primero del siguiente."""
+
+
+def _mes(anio, mes):
+    hasta = date(anio + 1, 1, 1) if mes == 12 else date(anio, mes + 1, 1)
+    return Periodo(clave='%04d-%02d' % (anio, mes), desde=date(anio, mes, 1),
+                   hasta=hasta, etiqueta='%s %d' % (MESES[mes - 1], anio))
+
+
+def _periodo_de(texto):
+    """'AAAA-MM' -> Periodo; cualquier otra cosa -> None, que es "todo".
+
+    Un parametro roto no es un error que mostrar: se cae al acumulado, que es
+    lo que la pantalla mostraba antes de que existiera el filtro.
+    """
+    if not texto:
+        return None
+    try:
+        anio, mes = (int(parte) for parte in texto.split('-'))
+        return _mes(anio, mes)
+    except (ValueError, TypeError):
+        return None
+
+
+def _periodos_disponibles(empresa_id):
+    """Los meses con algo que mirar, del mas nuevo al mas viejo.
+
+    Desde el primer pedido o el primer gasto -- lo que haya empezado antes --
+    hasta hoy. Un mes sin movimientos en el medio aparece igual: decir "en
+    agosto no paso nada" es un dato.
+    """
+    primer_pedido = (db.session.query(func.min(Pedido.fecha_pedido))
+                     .filter(Pedido.empresa_id == empresa_id).scalar())
+    primer_gasto = (db.session.query(func.min(Gasto.fecha))
+                    .filter(Gasto.empresa_id == empresa_id).scalar())
+    inicios = [fecha.date() if isinstance(fecha, datetime) else fecha
+               for fecha in (primer_pedido, primer_gasto) if fecha]
+    if not inicios:
+        return []
+    inicio = min(inicios)
+    hoy = date.today()
+    anio, mes = hoy.year, hoy.month
+    periodos = []
+    while (anio, mes) >= (inicio.year, inicio.month):
+        periodos.append(_mes(anio, mes))
+        anio, mes = (anio - 1, 12) if mes == 1 else (anio, mes - 1)
+    return periodos
+
+
+def _pedido_en_periodo(periodo):
+    if periodo is None:
+        return true()
+    return and_(
+        Pedido.fecha_pedido >= datetime.combine(periodo.desde,
+                                                datetime.min.time()),
+        Pedido.fecha_pedido < datetime.combine(periodo.hasta,
+                                               datetime.min.time()))
+
+
+def _pedidos_vendidos(empresa_id, periodo=None):
+    """Los pedidos que SON ventas (`_es_venta`), con canal e items cargados.
+
+    La consulta de /reportes/margen, y por lo tanto la del resultado: los dos
+    tienen que mirar exactamente los mismos pedidos.
+    """
+    return (Pedido.query
+            .options(joinedload(Pedido.canal),
+                     joinedload(Pedido.items))
+            .filter(Pedido.empresa_id == empresa_id)
+            .filter(*_es_venta())
+            .filter(_pedido_en_periodo(periodo))
+            .order_by(Pedido.fecha_pedido.desc(), Pedido.id.desc())
+            .all())
+
+
+def _gasto_de_naturaleza(naturaleza):
+    """Condicion sobre Gasto: su categoria tiene esta naturaleza."""
+    return Gasto.categoria_id.in_(
+        select(Categoria.id).where(Categoria.naturaleza == naturaleza))
+
+
+def _gasto_sin_naturaleza():
+    """El gasto no tiene categoria, o la tiene sin clasificar. NULL no es
+    'gasto': no se resta ni se ignora, se muestra aparte."""
+    return or_(Gasto.categoria_id.is_(None),
+               Gasto.categoria_id.in_(
+                   select(Categoria.id).where(Categoria.naturaleza.is_(None))))
+
+
+def _gasto_en_periodo(periodo):
+    if periodo is None:
+        return true()
+    return and_(Gasto.fecha >= periodo.desde, Gasto.fecha < periodo.hasta)
+
+
+def gastos_por_naturaleza(empresa_id, periodo=None):
+    """{'activo'|'gasto'|'sin_clasificar': (monto, cantidad)}.
+
+    La usan el resultado y el dashboard, que parte su tarjeta de gastos en lo
+    que se consumio y lo que se convirtio en stock.
+    """
+    en_periodo = _gasto_en_periodo(periodo)
+    return {
+        NATURALEZA_ACTIVO: _total_gastos(
+            empresa_id, and_(_gasto_de_naturaleza(NATURALEZA_ACTIVO),
+                             en_periodo)),
+        NATURALEZA_GASTO: _total_gastos(
+            empresa_id, and_(_gasto_de_naturaleza(NATURALEZA_GASTO),
+                             en_periodo)),
+        'sin_clasificar': _total_gastos(
+            empresa_id, and_(_gasto_sin_naturaleza(), en_periodo)),
+    }
+
+
+def _por_socio_ordenado(por_socio):
+    """{socio: (monto, n)} -> filas en el orden de SOCIOS, sin dueño al final."""
+    claves = [clave for clave in SOCIOS if clave in por_socio]
+    claves += [clave for clave in por_socio if clave not in SOCIOS]
+    return [{'nombre': SOCIOS.get(clave, ETIQUETA_SIN_SOCIO),
+             'monto': por_socio[clave][0], 'cantidad': por_socio[clave][1]}
+            for clave in claves]
+
+
+def _gastos_operativos(empresa_id, periodo=None):
+    """Los gastos de naturaleza 'gasto', con sus subtotales por origen.
+
+    El total es UNO y resta entero. Los subtotales dicen de donde salio:
+
+        facturacion  abierto por la cuenta (socio) que lo pago
+        capital      del pool de los socios
+        mixto        abierto por la PARTE que puso cada cuenta
+        sin origen   no se dijo de que bolsillo, pero se gasto igual
+    """
+    condicion = and_(_gasto_de_naturaleza(NATURALEZA_GASTO),
+                     _gasto_en_periodo(periodo))
+
+    total, cantidad = _total_gastos(empresa_id, condicion)
+    facturacion = _por_socio_ordenado(
+        _gasto_facturacion_por_socio(empresa_id, condicion))
+    mixto = _por_socio_ordenado(_gasto_mixto_por_socio(empresa_id, condicion))
+
+    return {
+        'total': total,
+        'cantidad': cantidad,
+        'facturacion': facturacion,
+        'facturacion_total': _total_gastos(
+            empresa_id, and_(condicion,
+                             Gasto.origen_fondo == ORIGEN_FACTURACION))[0],
+        'capital': _total_gastos(
+            empresa_id, and_(condicion, Gasto.origen_fondo == ORIGEN_CAPITAL)),
+        'mixto': mixto,
+        'mixto_total': _total_gastos(
+            empresa_id, and_(condicion, Gasto.origen_fondo == ORIGEN_MIXTO))[0],
+        'sin_origen': _total_gastos(
+            empresa_id, and_(condicion, Gasto.origen_fondo.is_(None))),
+    }
+
+
+def _costo_de_regalos(empresa_id, periodo=None):
+    """Lo que costo la mercaderia regalada: snapshot x cantidad.
+
+    Es la opcion B del Sorteo: el costo sale del PEDIDO marcado `es_regalo`,
+    no de un gasto tipeado a mano -- que repetia una mercaderia ya pagada en
+    la compra. Mismos pedidos que cuenta `_regalos_por_canal` (no cancelados).
+
+    Un regalo con una linea sin costo cargado no suma cero: queda listado.
+    """
+    pedidos = (Pedido.query
+               .options(joinedload(Pedido.items))
+               .filter(Pedido.empresa_id == empresa_id)
+               .filter(func.lower(Pedido.estado).notin_(ESTADOS_NO_VENDIDOS))
+               .filter(Pedido.es_regalo.is_(True))
+               .filter(_pedido_en_periodo(periodo))
+               .all())
+
+    costo = CERO
+    completos = 0
+    unidades = 0
+    sin_costo = []
+    for pedido in pedidos:
+        if any(item.costo_unitario_snapshot is None for item in pedido.items):
+            sin_costo.append(_etiqueta_pedido(pedido))
+            continue
+        completos += 1
+        unidades += sum(item.cantidad for item in pedido.items)
+        costo += sum((item.costo_unitario_snapshot * item.cantidad
+                      for item in pedido.items), CERO)
+    return {'costo': costo, 'pedidos': completos, 'unidades': unidades,
+            'sin_costo': sin_costo}
+
+
+def resultado_del_negocio(empresa_id, periodo=None, pedidos=None):
+    """El estado de resultados de la empresa, en un dict listo para mostrar.
+
+    `pedidos` lo pasa /reportes/margen para que el resultado se arme sobre la
+    MISMA lista que dibuja sus cortes; sin el, se piden con el mismo criterio.
+
+    Todo o nada por pedido, como en margen: un pedido al que le falta un
+    costo no entra a ninguna linea y queda listado en `incompletos`.
+
+    Los porcentajes son sobre las ventas netas, y sin ventas son None -- un
+    guion en pantalla, no una division por cero.
+
+    Los gastos SIN CLASIFICAR (categoria sin naturaleza) no se restan: no se
+    sabe si son stock o consumo. Viajan en `sin_clasificar` para que la
+    pantalla diga que la utilidad neta no los incluye.
+    """
+    if pedidos is None:
+        pedidos = _pedidos_vendidos(empresa_id, periodo)
+
+    ventas_netas = comisiones = cmv = CERO
+    envio_cobrado = envio_pagado = utilidad_bruta = CERO
+    completos = 0
+    incompletos = []
+
+    for pedido in pedidos:
+        if _faltantes(pedido):
+            incompletos.append({
+                'etiqueta': _etiqueta_pedido(pedido),
+                'canal': pedido.canal.nombre if pedido.canal else '—',
+            })
+            continue
+        calculo = _calcular(pedido)
+        completos += 1
+        ventas_netas += calculo['ingreso_neto'] - calculo['envio']
+        comisiones += calculo['comision']
+        cmv += calculo['costo_mercaderia']
+        envio_cobrado += calculo['envio']
+        envio_pagado += calculo['envio_vendedor']
+        # La ganancia del pedido tal cual la calcula margen. Es igual a
+        # ventas - comisiones - cmv + (cobrado - pagado) por algebra, pero se
+        # suma la de margen para que las dos pantallas no puedan separarse.
+        utilidad_bruta += calculo['ganancia']
+
+    regalos = _costo_de_regalos(empresa_id, periodo)
+    gastos = _gastos_operativos(empresa_id, periodo)
+    sin_clasificar = _total_gastos(
+        empresa_id, and_(_gasto_sin_naturaleza(), _gasto_en_periodo(periodo)))
+
+    gastos_operativos_total = gastos['total'] + regalos['costo']
+    utilidad_neta = utilidad_bruta - gastos_operativos_total
+
+    return {
+        'periodo': periodo,
+        'ventas_netas': ventas_netas,
+        'comisiones': comisiones,
+        'cmv': cmv,
+        'envio_cobrado': envio_cobrado,
+        'envio_pagado': envio_pagado,
+        'envio_neto': envio_cobrado - envio_pagado,
+        'utilidad_bruta': utilidad_bruta,
+        'utilidad_bruta_pct': _porcentaje(utilidad_bruta, ventas_netas),
+        'pedidos': completos,
+        'incompletos': incompletos,
+        'regalos': regalos,
+        'gastos': gastos,
+        'gastos_operativos_total': gastos_operativos_total,
+        'gastos_operativos_pct': _porcentaje(gastos_operativos_total,
+                                             ventas_netas),
+        'sin_clasificar': sin_clasificar,
+        'utilidad_neta': utilidad_neta,
+        'utilidad_neta_pct': _porcentaje(utilidad_neta, ventas_netas),
+    }
+
+
+def activos_del_negocio(empresa_id, resultado_historico):
+    """El stock valuado a costo y la conciliacion contra lo comprado.
+
+    STOCK VALUADO = stock x costo_unitario, solo donde existen LOS DOS. Un
+    producto sin costo, o sin control de stock (stock NULL, como el combo, que
+    se arma con las piezas que ya cuentan los tarjeteros), va listado aparte
+    y nunca como cero: valuarlo en 0 diria que no vale nada.
+
+    CONCILIACION. Toda compra de naturaleza activo tiene que terminar en uno
+    de tres lugares: se vendio (CMV), se regalo, o sigue en el deposito.
+
+        diferencia = compras - (CMV + regalos + stock valuado)
+
+    Lo que la explica cuando no da cero -- costos estimados o redondeados,
+    stock mal cargado, productos sin costo -- se lee en el detalle.
+    `resultado_historico` es el resultado SIN periodo: se compara contra todo
+    lo comprado desde siempre.
+    """
+    valuados = []
+    sin_costo = []
+    sin_control = []
+    stock_valuado = CERO
+    for producto in (Producto.query.filter_by(empresa_id=empresa_id)
+                     .order_by(Producto.nombre).all()):
+        if producto.stock is None:
+            sin_control.append({'nombre': producto.nombre,
+                                'costo': producto.costo_unitario})
+        elif producto.costo_unitario is None:
+            sin_costo.append({'nombre': producto.nombre,
+                              'stock': producto.stock})
+        else:
+            valor = producto.costo_unitario * producto.stock
+            stock_valuado += valor
+            valuados.append({'nombre': producto.nombre,
+                             'stock': producto.stock,
+                             'costo': producto.costo_unitario,
+                             'valor': valor})
+
+    compras, compras_cantidad = _total_gastos(
+        empresa_id, _gasto_de_naturaleza(NATURALEZA_ACTIVO))
+
+    cmv = resultado_historico['cmv']
+    regalos = resultado_historico['regalos']['costo']
+    explicado = cmv + regalos + stock_valuado
+
+    return {
+        'stock_valuado': stock_valuado,
+        'productos': valuados,
+        'sin_costo': sin_costo,
+        'sin_control': sin_control,
+        'compras': compras,
+        'compras_cantidad': compras_cantidad,
+        'cmv': cmv,
+        'regalos': regalos,
+        'explicado': explicado,
+        'diferencia': compras - explicado,
+        'pedidos_incompletos': len(resultado_historico['incompletos']),
+        'regalos_sin_costo': len(resultado_historico['regalos']['sin_costo']),
+    }

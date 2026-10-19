@@ -372,11 +372,14 @@ class TestLosTresQueQuedan(BaseEvaS5):
         self.assertIn('$150000', texto)
         self.assertIn('Gastos Totales', texto)
         self.assertIn('$120000', texto)
-        # FASE-EVA-S6: el titulo es "Flujo de Caja" desde entonces. El valor
-        # que se afirma es el mismo $21000 de siempre: la slice renombro la
-        # tarjeta, no la cuenta.
+        # FASE-EVA-S6: el titulo es "Flujo de Caja" desde entonces.
         self.assertIn('Flujo de Caja', texto)
-        self.assertIn('$21000', texto)
+        # FASE-RESULTADOS-S1: la tarjeta "Flujo de Caja" muestra la resta SIN
+        # la tasa de impuestos a las ganancias (utilidad_bruta), porque un
+        # flujo de caja no paga ese impuesto. Cambia a proposito: el $21000
+        # era 30000 menos un 30% que nunca salio de ninguna cuenta.
+        self.assertIn('$30000', texto)
+        self.assertNotIn('$21000', texto)
 
     def test_los_ingresos_siguen_siendo_las_ventas_y_no_el_aporte(self):
         """El fix de FASE-EVA-S4, intacto."""

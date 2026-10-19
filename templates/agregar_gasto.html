@@ -270,7 +270,7 @@
                         <select id="categoria_id" name="categoria_id" required autocomplete="off">
                             <option value="">-- Selecciona una categoria --</option>
                             {% for cat in categorias %}
-                                <option value="{{ cat.id }}">{{ cat.nombre }}</option>
+                                <option value="{{ cat.id }}">{{ cat.nombre }} · {{ cat.naturaleza_legible }}</option>
                             {% endfor %}
                         </select>
                     </div>

@@ -142,7 +142,25 @@
                         <option value="ingreso">Ingreso</option>
                     </select>
                 </div>
-    
+
+                {# FASE-RESULTADOS-S1: solo para las de gasto. Activo = se
+                   convierte en stock (mercaderia, flete de compra, aduana) y
+                   resta recien cuando se vende; gasto = se consume y resta
+                   la utilidad del mes. #}
+                <div class="form-group" id="grupoNaturaleza" style="display: none;">
+                    <label>¿Qué es lo que se paga?</label>
+                    <select name="naturaleza" id="naturalezaInput" autocomplete="off">
+                        <option value="">Selecciona</option>
+                        {% for clave, nombre in naturalezas.items() %}
+                        <option value="{{ clave }}">{{ nombre }}</option>
+                        {% endfor %}
+                    </select>
+                    <small style="color: #888; margin-top: 5px; display: block;">
+                        Activo: mercadería, flete de compra, aduana. No baja la ganancia hasta que se vende.
+                        Gasto: publicidad, empaque, muestras. Baja la ganancia del mes.
+                    </small>
+                </div>
+
                 <div class="botones">
                     <button type="submit" class="btn-guardar" id="btnGuardar">Guardar</button>
                     <button type="button" class="btn-cancelar" onclick="window.location.href='/categorias'">Cancelar</button>
@@ -152,6 +170,12 @@
     </div>
 
     <script>
+        const tipoSelect = document.getElementById('tipoInput');
+        const grupoNaturaleza = document.getElementById('grupoNaturaleza');
+        tipoSelect.addEventListener('change', function() {
+            grupoNaturaleza.style.display = this.value === 'gasto' ? 'block' : 'none';
+        });
+
         document.getElementById('formCategoria').addEventListener('submit', async function(e) {
             e.preventDefault();
 
@@ -167,6 +191,11 @@
 
             if (!tipo) {
                 mostrarError('Debes seleccionar un tipo');
+                return;
+            }
+
+            if (tipo === 'gasto' && !document.getElementById('naturalezaInput').value) {
+                mostrarError('Elegí si es un activo o un gasto');
                 return;
             }
 

@@ -221,6 +221,7 @@
                         <tr>
                             <th>Nombre</th>
                             <th>Tipo</th>
+                            <th>Naturaleza</th>
                             <th>Transacciones</th>
                             <th>Acciones</th>
                         </tr>
@@ -235,6 +236,13 @@
                                     {% else %}
                                         <span class="tipo-ingreso">Ingreso</span>
                                     {% endif %}
+                                </td>
+                                {# FASE-RESULTADOS-S1: activo o gasto. "sin clasificar" se ve
+                                   distinto a proposito: es un dato que falta. #}
+                                <td>
+                                    {% if item.categoria.tipo == 'gasto' %}
+                                        <span {% if not item.categoria.naturaleza %}style="color: #d6a441;"{% endif %}>{{ item.categoria.naturaleza_legible }}</span>
+                                    {% else %}—{% endif %}
                                 </td>
                                 <td>
                                     <span class="badge">{{ item.total_transacciones }} total</span>

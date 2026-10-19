@@ -404,7 +404,12 @@ class TestDashboardConDatos(BaseEva):
                          'dan 999999 el aporte de capital volvio a contarse '
                          'como facturacion; si dan 1149999 se estan contando '
                          'los dos y ademas se duplica.')
-        self.assertIn('$21000', texto)         # utilidad neta
+        # FASE-RESULTADOS-S1: la tarjeta "Flujo de Caja" muestra la resta SIN
+        # la tasa de impuestos a las ganancias (utilidad_bruta), porque un
+        # flujo de caja no paga ese impuesto. Cambia a proposito: el $21000
+        # era 30000 menos un 30% que nunca salio de ninguna cuenta.
+        self.assertIn('$30000', texto)         # ventas - gastos, sin impuesto
+        self.assertNotIn('$21000', texto)
 
         # FASE-EVA-S5: margen, ROI y EVA ya NO estan en la pantalla.
         #

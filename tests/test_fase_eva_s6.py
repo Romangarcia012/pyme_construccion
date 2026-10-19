@@ -356,8 +356,12 @@ class TestElNumeroNoCambio(BaseEvaS6):
         self.assertEqual(9000.0, analisis['impuestos'])
         self.assertEqual(UTILIDAD_NETA, analisis['utilidad_neta'])
 
-        # Y el mismo numero en la pantalla, bajo el titulo nuevo.
-        self.assertIn('$21000', texto)
+        # Y en la pantalla, bajo el titulo nuevo. FASE-RESULTADOS-S1: la tarjeta "Flujo de Caja" muestra la resta SIN
+        # la tasa de impuestos a las ganancias (utilidad_bruta), porque un
+        # flujo de caja no paga ese impuesto. Cambia a proposito: el $21000
+        # era 30000 menos un 30% que nunca salio de ninguna cuenta.
+        self.assertIn('$30000', texto)
+        self.assertNotIn('$21000', texto)
 
     def test_el_numero_negativo_tambien_es_el_de_siempre(self):
         """La rama que ahora lleva aclaracion muestra la misma cuenta de antes."""
@@ -368,7 +372,11 @@ class TestElNumeroNoCambio(BaseEvaS6):
         self.assertEqual(50000.0, analisis['ingresos'])
         self.assertEqual(200000.0, analisis['gastos'])
         self.assertEqual(UTILIDAD_NETA_NEGATIVA, analisis['utilidad_neta'])
-        self.assertIn('$-105000', texto)
+        # FASE-RESULTADOS-S1: sin la tasa de impuestos (ver arriba). El
+        # -105000 era -150000 "despues de impuestos": una perdida que paga
+        # impuesto a las ganancias negativo.
+        self.assertIn('$-150000', texto)
+        self.assertNotIn('$-105000', texto)
 
     def test_el_color_negativo_sigue_siendo_rojo(self):
         """Lo que enganaba era el nombre, no el color: el semaforo queda igual."""

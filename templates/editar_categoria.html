@@ -140,7 +140,25 @@
                     </div>
                     <small style="color: #888; margin-top: 5px; display: block;">El tipo no se puede cambiar</small>
                 </div>
-                
+
+                {% if categoria.tipo == 'gasto' %}
+                {# FASE-RESULTADOS-S1 #}
+                <div class="form-group">
+                    <label>¿Qué es lo que se paga?</label>
+                    <select name="naturaleza" autocomplete="off"
+                            style="width: 100%; padding: 12px; background: #2a2a2a; border: 1px solid #444; border-radius: 6px; color: #e0e0e0; font-size: 14px;">
+                        <option value="" {% if not categoria.naturaleza %}selected{% endif %}>Sin clasificar</option>
+                        {% for clave, nombre in naturalezas.items() %}
+                        <option value="{{ clave }}" {% if categoria.naturaleza == clave %}selected{% endif %}>{{ nombre }}</option>
+                        {% endfor %}
+                    </select>
+                    <small style="color: #888; margin-top: 5px; display: block;">
+                        Activo: mercadería, flete de compra, aduana — no baja la ganancia hasta que se vende.
+                        Gasto: publicidad, empaque, muestras — baja la ganancia del mes.
+                    </small>
+                </div>
+                {% endif %}
+
                 <div class="botones">
                     <button type="submit" class="btn-guardar">Guardar</button>
                     <button type="button" class="btn-cancelar" onclick="window.location.href='/categorias'">Cancelar</button>

@@ -69,11 +69,43 @@ class Empresa(db.Model):
     tasa_impuestos = db.Column(db.Float, default=0.30)  # AGREGAR ESTA LÍNEA
     
 
+# FASE-RESULTADOS-S1: que ES lo que se pago, con vocabulario fijo.
+#
+# Es una propiedad de la CATEGORIA, no del gasto: "Compra de mercaderia" es
+# activo siempre y "Publicidad" es gasto siempre, y pedirlo en cada gasto
+# seria abrirle a quien carga la puerta de contestar distinto lo mismo.
+#
+#   'activo' -> la plata se convirtio en algo que la empresa TIENE: mercaderia,
+#               el flete que la trajo, la aduana que la libero. No baja la
+#               ganancia cuando se paga sino cuando se vende, via el costo
+#               congelado en `pedido_item.costo_unitario_snapshot`. Restarlo
+#               otra vez seria contar la misma mercaderia dos veces.
+#   'gasto'  -> la plata se consumio: publicidad, empaque, muestras que no se
+#               van a vender. Baja la utilidad del periodo en que se pago.
+#
+# No tiene nada que ver con `gasto.origen_fondo`: eso dice QUIEN puso la plata
+# (facturacion / capital / mixto), esto dice EN QUE se convirtio. Un gasto de
+# publicidad pagado con capital resta igual que uno pagado con facturacion.
+#
+# NULL es "todavia no se dijo", no un tercer valor y tampoco "gasto": el
+# resultado lo muestra aparte en vez de restarlo o ignorarlo en silencio.
+NATURALEZA_ACTIVO = 'activo'
+NATURALEZA_GASTO = 'gasto'
+
+NATURALEZAS = OrderedDict([
+    (NATURALEZA_ACTIVO, 'Activo (stock, se capitaliza)'),
+    (NATURALEZA_GASTO, 'Gasto operativo'),
+])
+
+
 class Categoria(db.Model):
     __tablename__ = 'categoria'
     id = db.Column(db.Integer, primary_key=True)
     nombre = db.Column(db.String(100), nullable=False)
     tipo = db.Column(db.String(20), nullable=False)  # 'gasto' o 'ingreso'
+    # FASE-RESULTADOS-S1: activo o gasto (ver NATURALEZAS). Solo la llevan las
+    # categorias de tipo 'gasto': un ingreso no se capitaliza ni se consume.
+    naturaleza = db.Column(db.String(10))
     # FASE-CATEGORIA-S1: mismo par que Gasto e Ingreso, y por el mismo motivo.
     # El vocabulario con el que se etiqueta la caja es de la EMPRESA: las siete
     # categorias Korvo las sembro la migracion sobre UN usuario, y mientras esa
@@ -90,7 +122,39 @@ class Categoria(db.Model):
     fecha_creacion = db.Column(db.DateTime, default=datetime.utcnow)
 
     empresa = db.relationship('Empresa', backref='categorias')
-    
+
+    __table_args__ = (
+        # El mismo vocabulario que `_validar_naturaleza`, del lado de la base:
+        # la migracion que siembra las naturalezas escribe SQL crudo.
+        db.CheckConstraint(
+            "naturaleza IS NULL OR naturaleza IN ('activo', 'gasto')",
+            name='ck_categoria_naturaleza_vocabulario'),
+        # Una categoria de ingreso con naturaleza afirmaria algo sin sentido
+        # ("este aporte es un activo") que ninguna pantalla sabria leer.
+        db.CheckConstraint(
+            "naturaleza IS NULL OR tipo = 'gasto'",
+            name='ck_categoria_naturaleza_solo_gasto'),
+    )
+
+    @db.validates('naturaleza')
+    def _validar_naturaleza(self, clave, valor):
+        """Una de las claves de NATURALEZAS, o nada. Mismo criterio que
+        `Gasto._validar_origen_fondo`: un typo guardado haria que la categoria
+        no la levante ni el resultado ni el bloque de activos."""
+        if valor is None or valor == '':
+            return None
+        if valor not in NATURALEZAS:
+            raise ValueError(
+                'naturaleza invalida: %r. Las validas son %s.'
+                % (valor, ', '.join(NATURALEZAS)))
+        return valor
+
+    @property
+    def naturaleza_legible(self):
+        if self.naturaleza is None:
+            return 'sin clasificar'
+        return NATURALEZAS[self.naturaleza]
+
 
 # FASE-CAJA-GENERAL-S3: de que plata salio un gasto, con vocabulario fijo.
 #

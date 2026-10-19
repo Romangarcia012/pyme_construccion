@@ -192,7 +192,7 @@
                         <label for="categoria_id">Categoría</label>
                         <select name="categoria_id" id="categoria_id" required autocomplete="off">
                             {% for cat in categorias %}
-                                <option value="{{ cat.id }}" {% if cat.id == gasto.categoria_id %}selected{% endif %}>{{ cat.nombre }}</option>
+                                <option value="{{ cat.id }}" {% if cat.id == gasto.categoria_id %}selected{% endif %}>{{ cat.nombre }}{% if cat.tipo == 'gasto' %} · {{ cat.naturaleza_legible }}{% endif %}</option>
                             {% endfor %}
                         </select>
                     </div>

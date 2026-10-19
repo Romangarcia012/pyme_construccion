@@ -116,9 +116,28 @@
 
         .aclaracion a, .aviso a { color: #7aa7d6; }
 
+        /* FASE-RESULTADOS-S1: el estado de resultados. Una sola columna de
+           numeros, con los subtotales sangrados para que se lea que ya estan
+           dentro de la linea de arriba y no se sumen otra vez a ojo. */
+        .resultado td { padding: 9px 15px; }
+        .resultado .sub td:first-child { padding-left: 38px; color: #999; font-size: 13px; }
+        .resultado .sub td { color: #999; font-size: 13px; }
+        .resultado .total td { border-top: 1px solid #555; font-weight: 600; color: #fff; }
+        .resultado .pct { color: #888; width: 90px; }
+        .periodo-form { display: flex; gap: 8px; align-items: center; margin-bottom: 18px; }
+        .periodo-form select {
+            background: #1a1a1a; color: #e0e0e0; border: 1px solid #333;
+            border-radius: 6px; padding: 7px 10px;
+        }
+        .periodo-form button {
+            background: #444; color: #e0e0e0; border: none; border-radius: 6px;
+            padding: 8px 12px; cursor: pointer;
+        }
+
         @media (max-width: 768px) {
             table { font-size: 14px; }
             th, td { padding: 10px; }
+            .resultado .sub td:first-child { padding-left: 22px; }
         }
     </style>
 </head>
@@ -131,8 +150,206 @@
                 <h1>Margen por producto y canal</h1>
                 <p class="subtitulo">
                     Cuánto entró, cuánto costó y cuánto quedó. Sobre {{ total_pedidos }}
-                    pedido{{ '' if total_pedidos == 1 else 's' }} (los cancelados no cuentan).
+                    pedido{{ '' if total_pedidos == 1 else 's' }}{% if periodo %} de {{ periodo.etiqueta }}{% endif %}
+                    (los cancelados y los regalos no cuentan como ventas).
                 </p>
+            </div>
+        </div>
+
+        {# FASE-RESULTADOS-S1: el filtro por mes. Sin elegir nada es el
+           acumulado, que es lo que la pantalla mostraba siempre. #}
+        <form method="GET" action="{{ url_for('reportes.margen') }}" class="periodo-form">
+            <label for="periodo">Período</label>
+            <select name="periodo" id="periodo">
+                <option value="" {% if not periodo %}selected{% endif %}>Todo</option>
+                {% for p in periodos %}
+                <option value="{{ p.clave }}" {% if periodo and periodo.clave == p.clave %}selected{% endif %}>{{ p.etiqueta }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit">Ver</button>
+        </form>
+
+        {% macro plata(valor) %}{{ '%.2f'|format(valor) }}{% endmacro %}
+        {% macro pct(valor) %}{% if valor is none %}—{% else %}{{ '%.1f'|format(valor) }} %{% endif %}{% endmacro %}
+
+        {# ================================================================
+           FASE-RESULTADOS-S1 -- Resultado del negocio
+           Lo que se consumio resta; lo que se convirtio en stock (naturaleza
+           activo) no resta aca: resta cuando se vende, como costo de lo
+           vendido. De que bolsillo salio cada gasto se abre en subtotales,
+           pero el total resta entero.
+           ================================================================ #}
+        <div class="grupo">
+            <h2>Resultado del negocio{% if periodo %} — {{ periodo.etiqueta }}{% endif %}</h2>
+            <p class="bajada">
+                Ventas menos lo que costó venderlas y lo que costó funcionar.
+                Las compras de mercadería no están acá: son stock (abajo, en Activos)
+                y restan recién cuando se venden.
+            </p>
+            <div class="tabla-container">
+                <table class="resultado">
+                    <tbody>
+                        <tr>
+                            <td>Ventas netas <span class="detalle">(sin envío, sin regalos, sin cancelados)</span></td>
+                            <td class="num">{{ plata(resultado.ventas_netas) }}</td>
+                            <td class="num pct"></td>
+                        </tr>
+                        <tr>
+                            <td>− Comisiones de plataforma</td>
+                            <td class="num">{{ plata(resultado.comisiones) }}</td>
+                            <td class="num pct"></td>
+                        </tr>
+                        <tr>
+                            <td>− Costo de lo vendido</td>
+                            <td class="num">{{ plata(resultado.cmv) }}</td>
+                            <td class="num pct"></td>
+                        </tr>
+                        <tr>
+                            <td>± Envíos <span class="detalle">(cobrado {{ plata(resultado.envio_cobrado) }} − pagado {{ plata(resultado.envio_pagado) }})</span></td>
+                            <td class="num">{{ plata(resultado.envio_neto) }}</td>
+                            <td class="num pct"></td>
+                        </tr>
+                        <tr class="total">
+                            <td>= Utilidad bruta</td>
+                            <td class="num {% if resultado.utilidad_bruta < 0 %}negativo{% endif %}">{{ plata(resultado.utilidad_bruta) }}</td>
+                            <td class="num pct">{{ pct(resultado.utilidad_bruta_pct) }}</td>
+                        </tr>
+                        <tr>
+                            <td>− Gastos operativos</td>
+                            <td class="num">{{ plata(resultado.gastos_operativos_total) }}</td>
+                            <td class="num pct">{{ pct(resultado.gastos_operativos_pct) }}</td>
+                        </tr>
+                        {% for fila in resultado.gastos.facturacion %}
+                        <tr class="sub">
+                            <td>pagado con facturación — {{ fila.nombre }} ({{ fila.cantidad }})</td>
+                            <td class="num">{{ plata(fila.monto) }}</td>
+                            <td></td>
+                        </tr>
+                        {% endfor %}
+                        {% if resultado.gastos.capital[1] %}
+                        <tr class="sub">
+                            <td>pagado con capital ({{ resultado.gastos.capital[1] }})</td>
+                            <td class="num">{{ plata(resultado.gastos.capital[0]) }}</td>
+                            <td></td>
+                        </tr>
+                        {% endif %}
+                        {% if resultado.gastos.mixto %}
+                        <tr class="sub">
+                            <td>mixto, dividido entre cuentas</td>
+                            <td class="num">{{ plata(resultado.gastos.mixto_total) }}</td>
+                            <td></td>
+                        </tr>
+                        {% for fila in resultado.gastos.mixto %}
+                        <tr class="sub">
+                            <td>&nbsp;&nbsp;&nbsp;parte de {{ fila.nombre }}</td>
+                            <td class="num">{{ plata(fila.monto) }}</td>
+                            <td></td>
+                        </tr>
+                        {% endfor %}
+                        {% endif %}
+                        {% if resultado.gastos.sin_origen[1] %}
+                        <tr class="sub">
+                            <td>sin origen cargado ({{ resultado.gastos.sin_origen[1] }})</td>
+                            <td class="num">{{ plata(resultado.gastos.sin_origen[0]) }}</td>
+                            <td></td>
+                        </tr>
+                        {% endif %}
+                        <tr class="sub">
+                            <td>regalos y sorteos: costo de la mercadería regalada ({{ resultado.regalos.unidades }} u.)</td>
+                            <td class="num">{{ plata(resultado.regalos.costo) }}</td>
+                            <td></td>
+                        </tr>
+                        <tr class="total">
+                            <td>= Utilidad neta</td>
+                            <td class="num {% if resultado.utilidad_neta < 0 %}negativo{% endif %}">{{ plata(resultado.utilidad_neta) }}</td>
+                            <td class="num pct {% if resultado.utilidad_neta_pct is not none and resultado.utilidad_neta_pct < 0 %}negativo{% endif %}">{{ pct(resultado.utilidad_neta_pct) }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="aclaracion">
+                {% if resultado.incompletos %}
+                <p class="aviso">⚠ {{ resultado.incompletos|length }} pedido{{ '' if resultado.incompletos|length == 1 else 's' }}
+                    sin todos sus costos cargados no {{ 'entra' if resultado.incompletos|length == 1 else 'entran' }} en ninguna línea:
+                    {% for fila in resultado.incompletos %}{{ fila.etiqueta }} ({{ fila.canal }}){% if not loop.last %}, {% endif %}{% endfor %}.
+                    Están en "Sin margen", más abajo.</p>
+                {% else %}
+                <p>Todos los pedidos tienen sus costos cargados ({{ resultado.pedidos }} en la cuenta).</p>
+                {% endif %}
+                {% if resultado.regalos.sin_costo %}
+                <p class="aviso">⚠ Regalos sin costo cargado, no restados: {{ resultado.regalos.sin_costo|join(', ') }}.</p>
+                {% endif %}
+                {% if resultado.sin_clasificar[1] %}
+                <p class="aviso">⚠ {{ resultado.sin_clasificar[1] }} gasto{{ '' if resultado.sin_clasificar[1] == 1 else 's' }}
+                    por {{ plata(resultado.sin_clasificar[0]) }} con categoría sin clasificar (ni activo ni gasto): la utilidad neta
+                    no {{ 'lo' if resultado.sin_clasificar[1] == 1 else 'los' }} incluye.
+                    Clasificala en <a href="{{ url_for('listar_categorias') }}">Categorías</a>.</p>
+                {% endif %}
+                <p>La venta "ventas Meli" cargada en bulto está neta de la comisión de Mercado Libre: su comisión es 0 a propósito.</p>
+                <p>Resultado antes de impuestos a las ganancias. Las devoluciones no se descuentan todavía.</p>
+            </div>
+        </div>
+
+        {# ================================================================
+           FASE-RESULTADOS-S1 -- Activos: lo que la plata comprada sigue siendo
+           Siempre a HOY, sin importar el periodo elegido arriba.
+           ================================================================ #}
+        <div class="grupo">
+            <h2>Activos — stock valuado a costo, hoy</h2>
+            <p class="bajada">Lo comprado que todavía no se vendió. Stock × costo unitario cargado.</p>
+            <div class="tabla-container">
+                <table>
+                    <thead>
+                        <tr><th>Producto</th><th class="num">Stock</th><th class="num">Costo unitario</th><th class="num">Valor</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for fila in activos.productos %}
+                        <tr>
+                            <td>{{ fila.nombre }}</td>
+                            <td class="num">{{ fila.stock }}</td>
+                            <td class="num">{{ plata(fila.costo) }}</td>
+                            <td class="num">{{ plata(fila.valor) }}</td>
+                        </tr>
+                        {% endfor %}
+                        <tr class="respuesta">
+                            <td>Stock valuado</td><td></td><td></td>
+                            <td class="num">{{ plata(activos.stock_valuado) }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+            {% if activos.sin_costo or activos.sin_control %}
+            <div class="aclaracion">
+                {% for fila in activos.sin_costo %}
+                <p class="aviso">⚠ {{ fila.nombre }}: {{ fila.stock }} u. sin costo cargado, no valuadas (no es cero:
+                    <a href="{{ url_for('productos.listar_stock') }}">cargar el costo</a>).</p>
+                {% endfor %}
+                {% for fila in activos.sin_control %}
+                <p>{{ fila.nombre }}: sin control de stock propio, no se valúa (si es un combo, sus piezas ya están contadas).</p>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <h2 style="margin-top: 22px;">Conciliación de lo comprado</h2>
+            <p class="bajada">Toda compra de stock termina vendida, regalada o en el depósito.</p>
+            <div class="tabla-container">
+                <table class="resultado">
+                    <tbody>
+                        <tr><td>Compras capitalizadas <span class="detalle">({{ activos.compras_cantidad }} gastos de categorías de naturaleza activo)</span></td>
+                            <td class="num">{{ plata(activos.compras) }}</td></tr>
+                        <tr class="sub"><td>vendido (costo de lo vendido, desde siempre)</td><td class="num">{{ plata(activos.cmv) }}</td></tr>
+                        <tr class="sub"><td>regalado</td><td class="num">{{ plata(activos.regalos) }}</td></tr>
+                        <tr class="sub"><td>en el depósito (stock valuado)</td><td class="num">{{ plata(activos.stock_valuado) }}</td></tr>
+                        <tr class="total"><td>Diferencia sin explicar</td>
+                            <td class="num {% if activos.diferencia < 0 %}negativo{% endif %}">{{ plata(activos.diferencia) }}</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div class="aclaracion">
+                <p>Una diferencia chica sale de costos unitarios redondeados o estimados. Una grande, de compras sin
+                    cargar, stock mal contado o productos sin costo.
+                    {% if activos.pedidos_incompletos %}Además hay {{ activos.pedidos_incompletos }} pedido(s) sin margen cuya mercadería no entra en lo vendido.{% endif %}
+                    {% if activos.regalos_sin_costo %}Y {{ activos.regalos_sin_costo }} regalo(s) sin costo cargado.{% endif %}</p>
             </div>
         </div>
 

@@ -11,6 +11,10 @@ from models import (
     ORIGEN_FACTURACION,
     # FASE-GASTO-MIXTO-S1: el tercer origen y la tabla donde vive su reparto.
     ORIGEN_MIXTO,
+    # FASE-RESULTADOS-S1: activo o gasto, la naturaleza de la categoria.
+    NATURALEZA_ACTIVO,
+    NATURALEZA_GASTO,
+    NATURALEZAS,
     CuentaCobro,
     GastoOrigenMixto,
 )
@@ -116,7 +120,9 @@ app.register_blueprint(productos_bp)
 # usa como ingresos. Se importa junto al blueprint y no arriba del archivo
 # porque rutas_reportes arrastra la cadena entera de blueprints, y esa cadena
 # necesita que `app` y `db` ya existan.
-from rutas_reportes import reportes_bp, facturado_neto, ventas_recientes
+# FASE-RESULTADOS-S1: `gastos_por_naturaleza` parte la tarjeta de gastos.
+from rutas_reportes import (reportes_bp, facturado_neto, gastos_por_naturaleza,
+                            ventas_recientes)
 app.register_blueprint(reportes_bp)
 
 # DEVOLUCIONES Y VUELTA DE STOCK (FASE-DEVOLUCIONES-S2)
@@ -846,7 +852,13 @@ def dashboard():
                                          dias)
     gastos_cat = gastos_por_categoria(gastos)
     ingresos_cat = ingresos_por_categoria(ingresos)
-    
+
+    # FASE-RESULTADOS-S1: la tarjeta "Gastos Totales" dice cuanto de eso se
+    # consumio y cuanto se convirtio en stock. El total no cambia -- es la
+    # plata que salio, y es lo que resta el Flujo de Caja --, pero leido solo
+    # mezclaba la publicidad con la mercaderia que sigue en el deposito.
+    por_naturaleza = gastos_por_naturaleza(empresa_id)
+
     # Últimos movimientos
     movimientos = _ultimos_movimientos(empresa_id)
 
@@ -854,6 +866,9 @@ def dashboard():
                          current_user=current_user,
                          usuario=current_user,
                          analisis=analisis,
+                         gastos_operativos=float(por_naturaleza[NATURALEZA_GASTO][0]),
+                         gastos_en_stock=float(por_naturaleza[NATURALEZA_ACTIVO][0]),
+                         gastos_sin_clasificar=float(por_naturaleza['sin_clasificar'][0]),
                          gastos_cat=gastos_cat,
                          ingresos_cat=ingresos_cat,
                          movimientos=movimientos)
@@ -1483,8 +1498,19 @@ def nueva_categoria():
                     Categoria.nombre == nombre).first():
                 flash('Esta categoria ya existe', 'danger')
                 return redirect(url_for('nueva_categoria'))
-            
+
+            # FASE-RESULTADOS-S1: activo o gasto, solo para las de gasto. Si
+            # no llega queda NULL -- "sin clasificar" --, que el resultado del
+            # negocio muestra aparte en vez de adivinarlo.
+            naturaleza = request.form.get('naturaleza', '').strip() or None
+            if tipo != 'gasto':
+                naturaleza = None
+            elif naturaleza is not None and naturaleza not in NATURALEZAS:
+                flash('Naturaleza inválida', 'danger')
+                return redirect(url_for('nueva_categoria'))
+
             categoria = Categoria(nombre=nombre, tipo=tipo,
+                                  naturaleza=naturaleza,
                                   empresa_id=current_user.empresa_id,
                                   usuario_id=current_user.id)
             db.session.add(categoria)
@@ -1498,8 +1524,8 @@ def nueva_categoria():
         except Exception as e:
             flash(f'Error: {str(e)}', 'danger')
             db.session.rollback()
-    
-    return render_template('nueva_categoria.html')
+
+    return render_template('nueva_categoria.html', naturalezas=NATURALEZAS)
 
 @app.route('/categorias')
 @login_required
@@ -1541,6 +1567,15 @@ def editar_categoria(id):
                 return redirect(url_for('editar_categoria', id=id))
             
             categoria.nombre = nombre
+            # FASE-RESULTADOS-S1: la naturaleza se puede corregir (el tipo
+            # no). Solo si el formulario la manda, para que un POST que solo
+            # renombra no la borre.
+            if categoria.tipo == 'gasto' and 'naturaleza' in request.form:
+                naturaleza = request.form.get('naturaleza', '').strip() or None
+                if naturaleza is not None and naturaleza not in NATURALEZAS:
+                    flash('Naturaleza inválida', 'danger')
+                    return redirect(url_for('editar_categoria', id=id))
+                categoria.naturaleza = naturaleza
             db.session.commit()
             
             registrar_cambio(current_user.id, 'editar', 'categoria', categoria.id, 
@@ -1551,7 +1586,8 @@ def editar_categoria(id):
         except Exception as e:
             flash(f'Error: {str(e)}', 'danger')
     
-    return render_template('editar_categoria.html', categoria=categoria)
+    return render_template('editar_categoria.html', categoria=categoria,
+                           naturalezas=NATURALEZAS)
 
 @app.route('/categoria/eliminar/<int:id>', methods=['POST'])
 @login_required
