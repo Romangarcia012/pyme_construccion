@@ -106,6 +106,26 @@
         .sin-canal { color: #777; font-size: 13px; }
         .vacio { color: #888; padding: 30px; text-align: center; }
 
+        /* FASE-PRODUCTOS-S3. Editar es un link; eliminar es un boton de un
+           form aparte (form="..."), porque la tabla ya esta adentro del form
+           de costos y los forms no se anidan. */
+        .acciones-fila { white-space: nowrap; }
+        .btn-fila {
+            background: none;
+            border: 1px solid #444;
+            color: #bbb;
+            padding: 6px 10px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-family: inherit;
+            text-decoration: none;
+            cursor: pointer;
+            display: inline-block;
+        }
+        .btn-fila:hover { border-color: #666; color: #fff; }
+        .btn-fila.peligro:hover { border-color: #dc3545; color: #ff6b6b; }
+        .con-ventas { color: #666; font-size: 11px; display: block; margin-top: 4px; }
+
         .aclaracion {
             color: #777;
             font-size: 13px;
@@ -194,6 +214,7 @@
                         <th class="num">Costo unitario</th>
                         <th>Sugerido Tiendanube</th>
                         <th>Canal</th>
+                        <th></th>
                     </tr>
                 </thead>
                 <tbody>
@@ -202,7 +223,9 @@
                             <td><span class="sku">{{ fila.sku }}</span></td>
                             <td>
                                 {{ fila.nombre }}
-                                {% if not fila.activo %}<span class="inactivo"> (inactivo)</span>{% endif %}
+                                {# Sin canal, inactivo es una decision de quien lo cargo:
+                                   archivado. Con canal, lo decide el canal. #}
+                                {% if not fila.activo %}<span class="inactivo"> ({% if fila.canales %}inactivo{% else %}archivado{% endif %})</span>{% endif %}
                             </td>
                             <td class="num">
                                 {% if fila.stock is none %}
@@ -242,6 +265,16 @@
                                     <span class="sin-canal">—</span>
                                 {% endif %}
                             </td>
+                            <td class="acciones-fila">
+                                <a href="{{ url_for('productos.editar_producto', producto_id=fila.id) }}" class="btn-fila">Editar</a>
+                                {% if fila.tiene_ventas %}
+                                    {# La ruta rechaza borrar un producto con ventas: no se ofrece. #}
+                                    <span class="con-ventas">con ventas: no se elimina</span>
+                                {% else %}
+                                    <button type="submit" class="btn-fila peligro"
+                                            form="form-eliminar-{{ fila.id }}">Eliminar</button>
+                                {% endif %}
+                            </td>
                         </tr>
                     {% endfor %}
                 </tbody>
@@ -261,10 +294,19 @@
         {% endif %}
         </form>
 
+        {# Los forms de eliminar van FUERA del de costos, y cada boton de la tabla
+           apunta al suyo con form="...". Este POST no borra: lleva a la pantalla
+           de confirmacion, que es la que manda confirmar=si. #}
+        {% for fila in filas if not fila.tiene_ventas %}
+            <form id="form-eliminar-{{ fila.id }}" method="POST"
+                  action="{{ url_for('productos.eliminar_producto', producto_id=fila.id) }}"></form>
+        {% endfor %}
+
         <p class="aclaracion">
-            El stock lo mantiene Tiendanube: cada sincronización lo vuelve a traer.
-            Las ventas de mostrador lo descuentan en el momento. Desde acá es solo
-            para mirar.
+            El stock de lo que vino de Tiendanube lo mantiene Tiendanube: cada
+            sincronización lo vuelve a traer, y por eso de esos productos sólo se edita
+            el costo. Lo que cargaste a mano se edita entero. Las ventas de mostrador
+            descuentan el stock en el momento.
         </p>
 
         <p class="aclaracion">

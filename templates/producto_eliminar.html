@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Eliminar producto</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #0f0f0f;
+            color: #e0e0e0;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container { max-width: 700px; margin: 0 auto; }
+
+        .header { margin-bottom: 30px; }
+        h1 { color: #fff; font-size: 28px; }
+        .subtitulo { color: #888; font-size: 14px; margin-top: 6px; }
+        .sku { color: #aaa; font-family: 'Consolas', monospace; }
+
+        .btn-volver {
+            background: #444;
+            color: #e0e0e0;
+            padding: 10px 15px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            margin-bottom: 20px;
+            text-decoration: none;
+            display: inline-block;
+            transition: 0.3s;
+        }
+        .btn-volver:hover { background: #555; }
+
+        .panel {
+            background: #1a1a1a;
+            border-radius: 8px;
+            border: 1px solid #2a2a2a;
+            padding: 20px;
+            margin-bottom: 20px;
+            line-height: 1.6;
+            font-size: 14px;
+            color: #bbb;
+        }
+        .panel p + p { margin-top: 10px; }
+        .panel strong { color: #fff; }
+
+        .peligro { border-left: 4px solid #dc3545; }
+        .aviso { border-left: 4px solid #e0a800; }
+
+        .acciones { display: flex; align-items: center; gap: 15px; flex-wrap: wrap; }
+        .acciones form { display: inline; }
+        .acciones a { color: #888; font-size: 13px; text-decoration: none; }
+        .acciones a:hover { color: #aaa; }
+
+        .btn-eliminar, .btn-archivar {
+            color: #fff;
+            border: none;
+            padding: 12px 22px;
+            border-radius: 6px;
+            font-size: 15px;
+            font-weight: 600;
+            font-family: inherit;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        .btn-eliminar { background: #a71d2a; }
+        .btn-eliminar:hover { background: #c82333; }
+        .btn-archivar { background: #444; }
+        .btn-archivar:hover { background: #555; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <a href="{{ url_for('productos.listar_stock') }}" class="btn-volver">← Volver al stock</a>
+
+        <div class="header">
+            <h1>Eliminar producto</h1>
+            <p class="subtitulo">{{ producto.nombre }} · <span class="sku">{{ producto.sku }}</span></p>
+        </div>
+
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                {% for category, message in messages %}
+                    <div style="padding: 15px; margin-bottom: 20px; border-radius: 6px; border-left: 4px solid {% if category == 'success' %}#28a745{% elif category == 'warning' %}#e0a800{% else %}#dc3545{% endif %}; background: {% if category == 'success' %}rgba(40, 167, 69, 0.1){% elif category == 'warning' %}rgba(224, 168, 0, 0.1){% else %}rgba(220, 53, 69, 0.1){% endif %}; color: {% if category == 'success' %}#51cf66{% elif category == 'warning' %}#ffd43b{% else %}#ff6b6b{% endif %};">
+                        {{ message }}
+                    </div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+
+        {% if ventas %}
+            {# Rechazo: la ruta no lo borra, así que la pantalla no ofrece el botón. #}
+            <div class="panel aviso">
+                <p>
+                    <strong>Este producto no se puede eliminar:</strong> aparece en
+                    {{ ventas }} venta{% if ventas != 1 %}s{% endif %}. Si se borrara, esas
+                    ventas dejarían de saber de qué producto eran y se perderían del margen
+                    y del vendido por canal.
+                </p>
+                {% if canales %}
+                    <p>
+                        Viene de {{ canales }}: si ya no lo vendés, pausalo o despublicalo
+                        allá y la próxima sincronización lo marca inactivo.
+                    </p>
+                {% elif producto.activo %}
+                    <p>
+                        Si ya no lo vendés, archivalo: deja de aparecer en la venta manual y
+                        sus ventas pasadas siguen en los reportes.
+                    </p>
+                {% else %}
+                    <p>Ya está archivado: no aparece en la venta manual.</p>
+                {% endif %}
+            </div>
+
+            <div class="acciones">
+                {% if not canales and producto.activo %}
+                    <form method="POST" action="{{ url_for('productos.archivar_producto', producto_id=producto.id) }}">
+                        <button type="submit" class="btn-archivar">Archivar</button>
+                    </form>
+                {% endif %}
+                <a href="{{ url_for('productos.listar_stock') }}">Volver</a>
+            </div>
+        {% else %}
+            <div class="panel peligro">
+                <p><strong>Esto no se puede deshacer.</strong> El producto se borra del catálogo junto con su costo cargado.</p>
+                {% if canales %}
+                    <p>
+                        Viene de {{ canales }}. Se borra también su vínculo con el canal, y
+                        <strong>si sigue publicado allá, vuelve en la próxima sincronización</strong>
+                        como producto nuevo y sin costo.
+                    </p>
+                {% else %}
+                    <p>No tiene ventas registradas, así que ningún reporte cambia.</p>
+                {% endif %}
+            </div>
+
+            <div class="acciones">
+                <form method="POST" action="{{ url_for('productos.eliminar_producto', producto_id=producto.id) }}">
+                    <input type="hidden" name="confirmar" value="si">
+                    <button type="submit" class="btn-eliminar">Sí, eliminar</button>
+                </form>
+                {% if not canales and producto.activo %}
+                    <form method="POST" action="{{ url_for('productos.archivar_producto', producto_id=producto.id) }}">
+                        <button type="submit" class="btn-archivar">Mejor archivarlo</button>
+                    </form>
+                {% endif %}
+                <a href="{{ url_for('productos.listar_stock') }}">Cancelar</a>
+            </div>
+        {% endif %}
+    </div>
+</body>
+</html>

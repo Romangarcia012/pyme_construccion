@@ -7,9 +7,11 @@ Hasta ahora `producto.stock` solo se veia entrando a Supabase: lo escribia el
 resync de Tiendanube (FASE3-S3) y tambien lo descuenta la venta presencial
 (`rutas_ventas.py`), pero no habia pantalla.
 
-Lo que NO se puede editar desde aca, y es a proposito: el stock. La fuente de
-verdad sigue siendo Tiendanube y cada resync pisa el numero, asi que una
-edicion manual duraria hasta la proxima corrida y seria mentira mientras tanto.
+Lo que NO se puede editar desde aca, y es a proposito: el stock de un producto
+que vino de un canal. La fuente de verdad sigue siendo Tiendanube y cada resync
+pisa el numero, asi que una edicion manual duraria hasta la proxima corrida y
+seria mentira mientras tanto. El de un producto cargado a mano si se edita
+(FASE-PRODUCTOS-S3, que tambien agrega archivar y eliminar; ver su bloque).
 Tampoco hay alertas de stock bajo.
 
 Lo que SI se edita, desde FASE-REPORTES-S3-COSTO, es `costo_unitario`. Es el
@@ -182,10 +184,12 @@ def listar_stock():
 
     canales = _canales_por_producto(current_user.empresa_id)
     sugeridos = _costo_sugerido_por_producto(current_user.empresa_id)
+    con_ventas = _productos_con_ventas([producto.id for producto in productos])
 
     filas = []
     for producto in productos:
         filas.append({
+            'id': producto.id,
             'sku': producto.sku,
             'nombre': producto.nombre,
             # None y 0 no son lo mismo y la plantilla los distingue: None es
@@ -199,6 +203,9 @@ def listar_stock():
             'costo_tn': sugeridos.get(producto.id),
             'canales': ', '.join(canales.get(producto.id, [])),
             'activo': producto.activo,
+            # FASE-PRODUCTOS-S3: la pantalla ofrece eliminar solo lo que la
+            # ruta despues acepta -- un producto sin ventas.
+            'tiene_ventas': producto.id in con_ventas,
         })
 
     return render_template('productos_listar.html', filas=filas)
@@ -399,7 +406,7 @@ def _leer_stock(eleccion, texto):
     return stock
 
 
-def _verificar_sku_libre(sku):
+def _verificar_sku_libre(sku, excluir_id=None):
     """El SKU es la identidad del producto y es unico por empresa.
 
     Se pregunta ANTES de insertar para poder contestar con un mensaje, en vez
@@ -408,10 +415,15 @@ def _verificar_sku_libre(sku):
     igual: entre esta consulta y el commit hay lugar para que entre otra alta
     del mismo SKU, y esa carrera tiene que terminar en el mismo aviso y no en
     un 500.
+
+    `excluir_id` es para la edicion (FASE-PRODUCTOS-S3): guardar un producto
+    con el SKU que ya tenia no es repetirlo.
     """
-    repetido = Producto.query.filter_by(
-        empresa_id=current_user.empresa_id, sku=sku).first()
-    if repetido is not None:
+    consulta = Producto.query.filter_by(
+        empresa_id=current_user.empresa_id, sku=sku)
+    if excluir_id is not None:
+        consulta = consulta.filter(Producto.id != excluir_id)
+    if consulta.first() is not None:
         raise ProductoInvalido(MENSAJE_SKU_REPETIDO % sku)
 
 
@@ -485,6 +497,298 @@ def nuevo_producto():
 
     # Al listado y no de vuelta al formulario: ahi se ve el producto recien
     # creado entre los demas, y es donde se carga el costo si quedo pendiente.
+    return redirect(url_for('productos.listar_stock'))
+
+
+# --------------------------------------------------------------------------
+# FASE-PRODUCTOS-S3: editar, archivar y eliminar
+# --------------------------------------------------------------------------
+# QUIEN MANDA EN CADA CAMPO
+#
+# Un producto con `MapeoProductoCanal` vino de un canal, y en cada corrida
+# `sync_tiendanube._upsert_producto_y_mapeo` (el mismo que usa el sync de
+# Mercado Libre) le pisa nombre, activo y stock -- el stock con NULL incluido
+# -- y precio_lista cuando el canal lo manda. Editar esos campos aca duraria
+# hasta el proximo sync y mientras tanto seria mentira. El SKU es peor: el sync
+# busca por (empresa_id, sku), asi que cambiarlo haria que la proxima corrida
+# no encuentre este producto y cree otro con el SKU del canal -- un duplicado,
+# con el mapeo reapuntado al nuevo y el costo quedado en el viejo.
+#
+# Por eso, con mapeo, lo unico editable es el costo, que ningun sync toca. La
+# regla vive en la ruta y no solo en la plantilla: un POST armado a mano con
+# nombre, SKU o stock se ignora, no se guarda. Archivar tampoco se ofrece: el
+# sync volveria a escribir `activo` en la corrida siguiente.
+#
+# Sin mapeo el producto es de quien lo cargo y se edita entero, menos
+# precio_lista, que no se pide en ningun lado.
+#
+# POR QUE NO SE BORRA UN PRODUCTO CON VENTAS
+#
+# `pedido_item.producto_id` apunta aca y es nullable: borrar el producto no
+# romperia la base, pero dejaria esas lineas "sin identificar" en el margen y
+# en el vendido por canal, y una devolucion de ellas ya no sabria a que stock
+# volver (`devolucion.pedido_item_id` cuelga del item, no del producto). Para
+# sacar de la venta algo que ya se vendio esta archivar: activo=False lo
+# esconde de la venta manual (`rutas_ventas._productos_de_la_empresa`) y deja
+# lo pasado como estaba.
+#
+# Ninguna de estas rutas llama a `registrar_cambio()`: `Producto` esta en
+# TABLAS_AUDITADAS y el hook de `auditoria.py` deja solo la fila de cada
+# campo editado y la del borrado.
+
+# El valor que tiene que traer el POST de la pantalla de confirmacion. Sin el,
+# un POST a /eliminar muestra la confirmacion y no borra: es lo que hace el
+# boton del listado.
+CONFIRMAR_ELIMINAR = 'si'
+
+# Los dos valores del radio de estado en la edicion. Cualquier otra cosa deja
+# el estado como estaba: un formulario que no lo mando no esta pidiendo
+# archivar.
+ESTADO_ACTIVO = 'si'
+ESTADO_ARCHIVADO = 'no'
+
+
+def _producto_o_404(producto_id):
+    """El producto, solo si es de la empresa de quien lo pide.
+
+    Uno de otra empresa es 404 y no 403: que exista en otro catalogo tampoco
+    es algo que quien pregunta tenga que saber.
+    """
+    return (Producto.query
+            .filter_by(id=producto_id, empresa_id=current_user.empresa_id)
+            .first_or_404())
+
+
+def _canales_del_producto(producto):
+    """Los canales de los que vino el producto, o [] si se cargo a mano.
+
+    Es la lista que decide todo lo de esta seccion: vacia, el producto es
+    editable entero; con algo, solo el costo.
+    """
+    etiquetas = []
+    for mapeo in producto.mapeos:
+        canal = mapeo.canal
+        etiqueta = ETIQUETA_CANAL.get(canal.tipo, canal.nombre) if canal else 'otro canal'
+        if etiqueta not in etiquetas:
+            etiquetas.append(etiqueta)
+    return etiquetas
+
+
+def _ventas_del_producto(producto):
+    """En cuantos pedidos aparece. Cero es lo unico que permite borrarlo."""
+    return (db.session.query(func.count(func.distinct(PedidoItem.pedido_id)))
+            .filter(PedidoItem.producto_id == producto.id)
+            .scalar()) or 0
+
+
+def _productos_con_ventas(ids_producto):
+    """Cuales de estos productos ya aparecen en alguna venta.
+
+    Una sola consulta para todo el listado, que con esto decide si muestra el
+    boton de eliminar en cada fila.
+    """
+    if not ids_producto:
+        return set()
+    filas = (db.session.query(PedidoItem.producto_id)
+             .filter(PedidoItem.producto_id.in_(list(ids_producto)))
+             .distinct()
+             .all())
+    return {producto_id for (producto_id,) in filas}
+
+
+def _enviado_de(producto):
+    """El producto tal como esta, en el formato del formulario de edicion."""
+    return {
+        'sku': producto.sku,
+        'nombre': producto.nombre,
+        'costo_unitario': ('' if producto.costo_unitario is None
+                           else str(producto.costo_unitario)),
+        # Vacio es "no llevo la cuenta" y no un cero: el radio arranca en la
+        # opcion que corresponde a lo que hay guardado.
+        'control_stock': ESTADO_ARCHIVADO if producto.stock is None else CONTROLA_STOCK,
+        'stock': '' if producto.stock is None else str(producto.stock),
+        'activo': ESTADO_ACTIVO if producto.activo else ESTADO_ARCHIVADO,
+    }
+
+
+def _leer_activo(texto, actual):
+    if texto == ESTADO_ACTIVO:
+        return True
+    if texto == ESTADO_ARCHIVADO:
+        return False
+    return actual
+
+
+def _mostrar_edicion(producto, canales, enviado):
+    return render_template('producto_editar.html', producto=producto,
+                           canales=', '.join(canales), enviado=enviado)
+
+
+@productos_bp.route('/editar/<int:producto_id>', methods=['GET', 'POST'])
+@login_required
+def editar_producto(producto_id):
+    """Edicion de un producto. Con mapeo, solo el costo (ver el bloque)."""
+    producto = _producto_o_404(producto_id)
+    canales = _canales_del_producto(producto)
+
+    if request.method == 'GET':
+        return _mostrar_edicion(producto, canales, _enviado_de(producto))
+
+    # Con mapeo, lo que no es el costo ni se lee del formulario: el enviado
+    # arranca con lo guardado, asi un error en el costo re-muestra la pantalla
+    # con los datos de verdad y no con lo que haya mandado el POST.
+    enviado = _enviado_de(producto)
+    enviado['costo_unitario'] = (request.form.get('costo_unitario') or '').strip()
+    if not canales:
+        for campo in ('sku', 'nombre', 'control_stock', 'stock', 'activo'):
+            enviado[campo] = (request.form.get(campo) or '').strip()
+
+    try:
+        nuevos = {'costo_unitario': _leer_costo(enviado['costo_unitario'],
+                                                producto.nombre)}
+        if not canales:
+            nuevos['sku'] = _leer_texto(enviado['sku'], 'codigo (SKU)', LARGO_SKU)
+            nuevos['nombre'] = _leer_texto(enviado['nombre'], 'nombre', LARGO_NOMBRE)
+            nuevos['stock'] = _leer_stock(enviado['control_stock'], enviado['stock'])
+            nuevos['activo'] = _leer_activo(enviado['activo'], producto.activo)
+            _verificar_sku_libre(nuevos['sku'], excluir_id=producto.id)
+
+        # Se compara antes de asignar: asi "no hubo cambios" no depende de
+        # como SQLAlchemy lleve la historia de cada atributo.
+        cambios = {campo: valor for campo, valor in nuevos.items()
+                   if getattr(producto, campo) != valor}
+        for campo, valor in cambios.items():
+            setattr(producto, campo, valor)
+        db.session.commit()
+    except (CostoInvalido, ProductoInvalido) as error:
+        db.session.rollback()
+        flash(str(error), 'error')
+        return _mostrar_edicion(producto, canales, enviado)
+    except IntegrityError:
+        # La carrera contra un alta o una edicion con el mismo SKU.
+        db.session.rollback()
+        flash(MENSAJE_SKU_REPETIDO % enviado['sku'], 'error')
+        return _mostrar_edicion(producto, canales, enviado)
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        flash('No se pudo guardar el producto. Revisa los datos e intenta de nuevo.',
+              'error')
+        return _mostrar_edicion(producto, canales, enviado)
+
+    if not cambios:
+        flash('No hubo cambios que guardar.', 'warning')
+    else:
+        flash('Se guardo "%s".' % producto.nombre, 'success')
+    return redirect(url_for('productos.listar_stock'))
+
+
+def _cambiar_activo(producto_id, activo):
+    """Archivar (activo=False) o reactivar (True) un producto sin mapeo."""
+    producto = _producto_o_404(producto_id)
+    canales = _canales_del_producto(producto)
+
+    if canales:
+        flash('"%s" viene de %s: si esta activo o no se cambia alla. La '
+              'proxima sincronizacion pisaria lo que se cambie aca.'
+              % (producto.nombre, ', '.join(canales)), 'error')
+        return redirect(url_for('productos.listar_stock'))
+
+    if producto.activo == activo:
+        flash('"%s" ya estaba %s.' % (producto.nombre,
+                                      'activo' if activo else 'archivado'),
+              'warning')
+        return redirect(url_for('productos.listar_stock'))
+
+    producto.activo = activo
+    try:
+        db.session.commit()
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        flash('No se pudo cambiar el estado del producto. Intenta de nuevo.', 'error')
+        return redirect(url_for('productos.listar_stock'))
+
+    if activo:
+        flash('Se reactivo "%s": vuelve a aparecer en la venta manual.'
+              % producto.nombre, 'success')
+    else:
+        flash('Se archivo "%s": ya no aparece en la venta manual. Sus ventas '
+              'pasadas siguen en los reportes.' % producto.nombre, 'success')
+    return redirect(url_for('productos.listar_stock'))
+
+
+@productos_bp.route('/archivar/<int:producto_id>', methods=['POST'])
+@login_required
+def archivar_producto(producto_id):
+    return _cambiar_activo(producto_id, False)
+
+
+@productos_bp.route('/reactivar/<int:producto_id>', methods=['POST'])
+@login_required
+def reactivar_producto(producto_id):
+    return _cambiar_activo(producto_id, True)
+
+
+@productos_bp.route('/eliminar/<int:producto_id>', methods=['GET', 'POST'])
+@login_required
+def eliminar_producto(producto_id):
+    """Borra un producto sin ventas, con sus mapeos, despues de confirmar.
+
+    GET, o POST sin `confirmar`, muestra la pantalla de confirmacion (o el
+    rechazo, si tiene ventas). Recien el POST que viene de esa pantalla borra.
+    """
+    producto = _producto_o_404(producto_id)
+    canales = _canales_del_producto(producto)
+    ventas = _ventas_del_producto(producto)
+
+    confirmado = (request.method == 'POST'
+                  and request.form.get('confirmar') == CONFIRMAR_ELIMINAR)
+    if not confirmado:
+        return render_template('producto_eliminar.html', producto=producto,
+                               canales=', '.join(canales), ventas=ventas)
+
+    if ventas:
+        flash('"%s" no se puede eliminar: aparece en %d venta%s, que dejarian '
+              'de saber de que producto eran.'
+              % (producto.nombre, ventas, '' if ventas == 1 else 's'), 'error')
+        return redirect(url_for('productos.eliminar_producto', producto_id=producto.id))
+
+    nombre = producto.nombre
+    mensaje_carrera = '"%s" no se elimino: se registro una venta mientras tanto.' % nombre
+
+    # `items_vendidos` se carga A PROPOSITO antes del delete, y no solo como
+    # segundo chequeo: al borrar el padre, SQLAlchemy pone en NULL el
+    # producto_id de cada item de esa coleccion (la FK es nullable), y lo haria
+    # en silencio con una venta que entro despues del conteo de arriba. Ya
+    # cargada y vacia, el flush no la vuelve a pedir, y una venta concurrente
+    # choca contra la FK de Postgres (el IntegrityError de abajo) en vez de
+    # quedar huerfana.
+    if producto.items_vendidos:
+        flash(mensaje_carrera, 'error')
+        return redirect(url_for('productos.listar_stock'))
+
+    try:
+        # Los mapeos primero y en la misma transaccion: su producto_id es NOT
+        # NULL y sin cascade en la relacion, borrar solo el producto
+        # intentaria dejarlos en NULL.
+        for mapeo in list(producto.mapeos):
+            db.session.delete(mapeo)
+        db.session.delete(producto)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        flash(mensaje_carrera, 'error')
+        return redirect(url_for('productos.listar_stock'))
+    except Exception:  # noqa: BLE001
+        db.session.rollback()
+        flash('No se pudo eliminar el producto. Intenta de nuevo.', 'error')
+        return redirect(url_for('productos.listar_stock'))
+
+    if canales:
+        flash('Se elimino "%s". Si sigue publicado en %s, la proxima '
+              'sincronizacion lo va a traer de vuelta, sin el costo.'
+              % (nombre, ', '.join(canales)), 'warning')
+    else:
+        flash('Se elimino "%s".' % nombre, 'success')
     return redirect(url_for('productos.listar_stock'))
 
 
